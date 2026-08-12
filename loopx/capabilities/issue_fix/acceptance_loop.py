@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -13,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from .intake_surface import build_content_ops_issue_fix_metadata_preview_packet
+from ...control_plane.runtime.validation_command import (
+    run_caller_validation as _run_caller_validation,
+    require_validation_passed as _require_passed,
+)
 
 
 ISSUE_FIX_ACCEPTANCE_LOOP_SCHEMA_VERSION = "issue_fix_acceptance_loop_v0"
@@ -247,39 +250,9 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
     return files[:20], truncated
 
 
-def _run_caller_validation(
-    workspace: Path,
-    *,
-    validation_command: str,
-    validation_label: str,
-    timeout_seconds: int,
-) -> dict[str, Any]:
-    argv = shlex.split(validation_command)
-    if not argv:
-        raise ValueError("validation_command must not be empty")
-    result = subprocess.run(
-        argv,
-        cwd=workspace,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout_seconds,
-    )
-    return {
-        "schema_version": "issue_fix_validation_command_v0",
-        "command_label": validation_label or "caller-declared validation",
-        "exit_code": result.returncode,
-        "passed": result.returncode == 0,
-        "stdout_captured": False,
-        "stderr_captured": False,
-        "local_path_captured": False,
-    }
-
-
-def _require_passed(step: Mapping[str, Any]) -> None:
-    if step.get("passed") is not True:
-        raise RuntimeError(f"{step.get('command_label')} failed with exit code {step.get('exit_code')}")
+# Caller-validation execution (_run_caller_validation / _require_passed) is
+# imported from control_plane.runtime.validation_command so the todo-completion
+# path can reuse the same privacy-safe handler.
 
 
 def _remove_temporary_git_workspace(workspace: Path) -> None:

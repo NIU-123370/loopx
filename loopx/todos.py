@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -8,8 +9,13 @@ from .agent_registry import registered_agent_ids_from_registry, require_register
 from .file_lock import exclusive_file_lock
 from .history import load_registry
 from .paths import resolve_runtime_root
+from .materials import find_registry_goal, goal_repo
 from .rollout_event_log import load_rollout_events, rollout_event_log_path
 from .control_plane.runtime.local_state_write_correctness import build_todo_write_correctness_dry_run_packet
+from .control_plane.runtime.validation_command import (
+    CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+    run_caller_validation,
+)
 from .state_refresh import now_local, resolve_goal_state
 from .status import (
     MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE,
@@ -622,6 +628,8 @@ def add_todo_to_lines(
     global_gate: bool | None = None,
     unblocks_todo_id: str | None = None,
     resume_when: str | None = None,
+    validation_command: str | None = None,
+    validation_label: str | None = None,
     monitor_metadata: dict[str, Any] | None = None,
     evidence: str | None = None,
     updated_at: str | None = None,
@@ -700,6 +708,8 @@ def add_todo_to_lines(
             global_gate=global_gate,
             unblocks_todo_id=unblocks_todo_id,
             resume_when=normalized_resume_when,
+            validation_command=validation_command,
+            validation_label=validation_label,
             **normalized_monitor_metadata,
             evidence=evidence,
             updated_at=updated_at,
@@ -877,6 +887,8 @@ def add_goal_todo(
     agent_id: str | None = None,
     unblocks_todo_id: str | None = None,
     resume_when: str | None = None,
+    validation_command: str | None = None,
+    validation_label: str | None = None,
     monitor_metadata: dict[str, Any] | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
@@ -1054,6 +1066,8 @@ def add_goal_todo(
             global_gate=True if global_gate else None,
             unblocks_todo_id=normalized_unblocks_todo_id,
             resume_when=normalized_resume_when,
+            validation_command=validation_command,
+            validation_label=validation_label,
             monitor_metadata=normalized_monitor_metadata,
             updated_at=updated_at,
         )
@@ -1504,6 +1518,134 @@ def update_goal_todo(
     )
 
 
+# Kept safely under the 30s outer CLI/MCP subprocess budget so a timed-out
+# validation still produces a typed receipt before the outer call is killed.
+_COMPLETION_VALIDATION_TIMEOUT_SECONDS = 20
+
+
+def _resolve_goal_repo_workspace(registry_path: Path, goal_id: str) -> Path | None:
+    """Resolve the goal's repository directory to use as the validation workspace."""
+    goal = find_registry_goal(load_registry(registry_path), goal_id)
+    if goal is None:
+        return None
+    repo = goal_repo(goal)
+    if repo is None or not repo.is_dir():
+        return None
+    return repo
+
+
+def _read_declared_validation(
+    *, state_file: Path, todo_id: str, role: str | None
+) -> tuple[str | None, str | None, bool]:
+    """Pre-read a todo's declared validation command without the mutation lock.
+
+    Returns ``(validation_command, validation_label, already_completed)`` from
+    the markdown state file, or ``(None, None, False)`` when the todo is not
+    materialized in markdown. Read-only; safe to call before acquiring the
+    state-file lock so a slow validation command does not block concurrent todo
+    operations on the same goal (the MUTATION lock deadline is 5s).
+    ``validation_command`` is set only at ``todo add`` and has no update path,
+    so the value cannot drift between this pre-read and the in-lock commit.
+    """
+    try:
+        lines = state_file.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None, None, False
+    match = find_todo_block(lines, todo_id=todo_id, role=role)
+    if not match:
+        return None, None, False
+    _role, _section, _start, _end, block = match
+    return (
+        block.get("validation_command") or None,
+        block.get("validation_label") or None,
+        block.get("status") == TODO_STATUS_DONE,
+    )
+
+
+def _run_declared_completion_validation(
+    *,
+    validation_command: str | None,
+    validation_label: str | None,
+    registry_path: Path,
+    goal_id: str,
+) -> dict[str, Any] | None:
+    """Run a todo's declared caller-approved validation command.
+
+    Returns ``None`` when no ``validation_command`` is declared (the unchanged
+    fast path). Otherwise always returns a privacy-safe receipt whose
+    ``passed`` is True only when the command ran and exited zero; setup
+    failures (no repository workspace), timeouts, missing executables, and
+    malformed commands are all reported as ``passed=False`` receipts rather
+    than raised, so completion can surface a typed failure without committing.
+    """
+    if not validation_command:
+        return None
+    label = validation_label or "todo completion validation"
+    workspace = _resolve_goal_repo_workspace(registry_path, goal_id)
+    if workspace is None:
+        return {
+            "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+            "command_label": label,
+            "exit_code": None,
+            "passed": False,
+            "status": "workspace_unavailable",
+            "summary": (
+                "validation_command is declared but the goal has no "
+                "repository workspace to run it in"
+            ),
+            "stdout_captured": False,
+            "stderr_captured": False,
+            "local_path_captured": False,
+        }
+    try:
+        return run_caller_validation(
+            workspace,
+            validation_command=str(validation_command),
+            validation_label=label,
+            timeout_seconds=_COMPLETION_VALIDATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+            "command_label": label,
+            "exit_code": None,
+            "passed": False,
+            "status": "timeout",
+            "summary": (
+                f"validation command timed out after "
+                f"{_COMPLETION_VALIDATION_TIMEOUT_SECONDS}s"
+            ),
+            "stdout_captured": False,
+            "stderr_captured": False,
+            "local_path_captured": False,
+        }
+    except (FileNotFoundError, PermissionError) as exc:
+        return {
+            "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+            "command_label": label,
+            "exit_code": None,
+            "passed": False,
+            "status": "command_not_run",
+            "summary": f"validation command could not be launched: {exc}",
+            "stdout_captured": False,
+            "stderr_captured": False,
+            "local_path_captured": False,
+        }
+    except ValueError as exc:
+        # shlex.split rejects malformed (e.g. unbalanced-quote) commands.
+        return {
+            "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+            "command_label": label,
+            "exit_code": None,
+            "passed": False,
+            "status": "command_malformed",
+            "summary": f"validation command could not be parsed: {exc}",
+            "stdout_captured": False,
+            "stderr_captured": False,
+            "local_path_captured": False,
+        }
+
+
 def complete_goal_todo(
     *,
     registry_path: Path,
@@ -1550,6 +1692,42 @@ def complete_goal_todo(
         project=project,
         state_file=state_file,
     )
+    # Run caller-approved validation BEFORE acquiring the mutation lock. The
+    # validation command runs in the goal's repo workspace, not the state file,
+    # so it needs no state lock; running it here keeps the lock held only for
+    # the millisecond-scale read-modify-write (the MUTATION lock deadline is
+    # 5s) instead of across a multi-second subprocess.
+    validation_command_declared, validation_label_declared, already_completed = (
+        _read_declared_validation(
+            state_file=resolved_state_file, todo_id=todo_id, role=role
+        )
+    )
+    # Skip validation on dry_run and on a terminal replay (todo already done) —
+    # the in-lock completed_todo_replay short-circuit owns idempotent replays.
+    completion_validation = (
+        _run_declared_completion_validation(
+            validation_command=validation_command_declared,
+            validation_label=validation_label_declared,
+            registry_path=registry_path,
+            goal_id=goal_id,
+        )
+        if not dry_run and not already_completed
+        else None
+    )
+    if (
+        completion_validation is not None
+        and completion_validation.get("passed") is not True
+    ):
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "completed": False,
+            "goal_id": goal_id,
+            "todo_id": todo_id,
+            "changed": False,
+            "validation": completion_validation,
+            "validation_blocked_completion": True,
+        }
     with exclusive_file_lock(
         resolved_state_file,
         agent_id=agent_id or claimed_by,

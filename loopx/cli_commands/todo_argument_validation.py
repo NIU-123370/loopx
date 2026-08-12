@@ -45,6 +45,8 @@ TODO_OPTION_FIELDS = (
     ("--unblocks-todo-id", "unblocks_todo_id"),
     ("--successor-todo-id", "successor_todo_ids"),
     ("--resume-when", "resume_when"),
+    ("--validation-command", "validation_command"),
+    ("--validation-label", "validation_label"),
     ("--clear-resume-when", "clear_resume_when"),
     ("--target-key", "monitor_target_key"),
     ("--cadence", "cadence"),

@@ -111,6 +111,19 @@ def register_todo_command(
     todo_parser.add_argument("--status", choices=["open", "done", "blocked", "deferred"], help="For todo add/update, set the lifecycle status.")
     todo_parser.add_argument("--note", help="Public-safe note to attach to a lifecycle transition.")
     todo_parser.add_argument("--evidence", help="Public-safe evidence pointer or short result for complete/update.")
+    todo_parser.add_argument(
+        "--validation-command",
+        help=(
+            "Caller-approved validation command (no shell) to run before a "
+            "todo's completion commits, e.g. 'pytest -q tests/test_x.py'. Set "
+            "on `todo add`; completion runs it independently and blocks on a "
+            "non-zero exit."
+        ),
+    )
+    todo_parser.add_argument(
+        "--validation-label",
+        help="Optional public-safe label for the validation receipt.",
+    )
     todo_parser.add_argument("--reason", help="Public-safe reason for blocked/deferred/supersede transitions.")
     todo_parser.add_argument(
         "--authority-reason",
@@ -502,6 +515,8 @@ def handle_todo_command(
                 agent_id=args.agent_id,
                 unblocks_todo_id=args.unblocks_todo_id,
                 resume_when=args.resume_when,
+                validation_command=args.validation_command,
+                validation_label=args.validation_label,
                 monitor_metadata={
                     "target_key": args.monitor_target_key,
                     "cadence": args.cadence,

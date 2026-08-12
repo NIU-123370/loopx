@@ -179,4 +179,21 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
                 f"- status: `{apply_result.get('status')}`",
             ]
         )
+    validation = payload.get("validation")
+    if isinstance(validation, dict):
+        lines.extend(
+            [
+                "",
+                "## Validation",
+                "",
+                f"- validation_blocked_completion: `{payload.get('validation_blocked_completion')}`",
+                f"- command_label: `{validation.get('command_label')}`",
+                f"- passed: `{validation.get('passed')}`",
+                f"- status: `{validation.get('status')}`",
+                f"- exit_code: `{validation.get('exit_code')}`",
+            ]
+        )
+        summary = validation.get("summary")
+        if summary:
+            lines.append(f"- summary: {summary}")
     return "\n".join(lines)
