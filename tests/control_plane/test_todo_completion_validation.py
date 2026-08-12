@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import loopx.todos as todos_module
+import loopx.control_plane.todos.completion_validation as completion_validation_module
 from loopx.status import parse_active_state_todos
 from loopx.todos import add_goal_todo, complete_goal_todo
 
@@ -102,14 +102,14 @@ def test_validation_command_declared_and_passing_commits_completion(
         validation_label="caller-declared smoke",
     )
     # Spy on the executor so the test fails if the gate is silently skipped.
-    original_runner = todos_module.run_caller_validation
+    original_runner = completion_validation_module.run_caller_validation
     calls = {"count": 0}
 
     def counting_runner(*args, **kwargs):  # type: ignore[no-untyped-def]
         calls["count"] += 1
         return original_runner(*args, **kwargs)
 
-    monkeypatch.setattr(todos_module, "run_caller_validation", counting_runner)
+    monkeypatch.setattr(completion_validation_module, "run_caller_validation", counting_runner)
 
     result = complete_goal_todo(
         registry_path=registry,
@@ -220,7 +220,7 @@ def test_validation_timeout_blocks_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        todos_module, "_COMPLETION_VALIDATION_TIMEOUT_SECONDS", 0.5
+        completion_validation_module, "_COMPLETION_VALIDATION_TIMEOUT_SECONDS", 0.5
     )
     registry, state = _write_fixture(tmp_path)
     todo = _add_todo(registry, validation_command=_SLEEP_COMMAND)
@@ -246,14 +246,14 @@ def test_terminal_replay_short_circuits_before_validation(
     registry, state = _write_fixture(tmp_path)
     todo = _add_todo(registry, validation_command=_PASS_COMMAND)
 
-    original_runner = todos_module.run_caller_validation
+    original_runner = completion_validation_module.run_caller_validation
     calls = {"count": 0}
 
     def counting_runner(*args, **kwargs):  # type: ignore[no-untyped-def]
         calls["count"] += 1
         return original_runner(*args, **kwargs)
 
-    monkeypatch.setattr(todos_module, "run_caller_validation", counting_runner)
+    monkeypatch.setattr(completion_validation_module, "run_caller_validation", counting_runner)
 
     first = complete_goal_todo(
         registry_path=registry,
