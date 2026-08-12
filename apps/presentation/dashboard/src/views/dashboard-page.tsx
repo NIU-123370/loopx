@@ -9124,6 +9124,25 @@ function formatUsageCount(value?: number | null) {
   return String(value ?? 0);
 }
 
+function formatTokenCount(value?: number | null) {
+  const n = value ?? 0;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatCostUsd(value?: number | null) {
+  return `$${(value ?? 0).toFixed(2)}`;
+}
+
+function formatDurationMs(value?: number | null) {
+  const ms = value ?? 0;
+  if (ms >= 3_600_000) return `${(ms / 3_600_000).toFixed(1)}h`;
+  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
+  if (ms >= 1_000) return `${Math.round(ms / 1_000)}s`;
+  return `${ms}ms`;
+}
+
 function formatUsageShare(value?: number | null) {
   return `${Math.round((value ?? 0) * 100)}%`;
 }
@@ -9422,6 +9441,18 @@ function UsageStatsPanel({ usage }: { usage?: UsageSummary | null }) {
           <UsageMetric
             label="Progress"
             value={`${formatUsageCount(totals.progress_signal_run_count_24h)} / ${formatUsageCount(totals.progress_signal_run_count_7d)}`}
+          />
+          <UsageMetric
+            label="Tokens 24h / 7d"
+            value={`${formatTokenCount(totals.input_tokens_24h + totals.output_tokens_24h)} / ${formatTokenCount(totals.input_tokens_7d + totals.output_tokens_7d)}`}
+          />
+          <UsageMetric
+            label="Cost 24h / 7d"
+            value={`${formatCostUsd(totals.cost_usd_24h)} / ${formatCostUsd(totals.cost_usd_7d)}`}
+          />
+          <UsageMetric
+            label="Runtime 24h / 7d"
+            value={`${formatDurationMs(totals.duration_ms_24h)} / ${formatDurationMs(totals.duration_ms_7d)}`}
           />
         </div>
         {topGoals.length ? (
