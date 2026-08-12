@@ -9413,6 +9413,12 @@ function UsageStatsPanel({ usage }: { usage?: UsageSummary | null }) {
     return null;
   }
   const totals = usage.totals;
+  const hasUsage =
+    totals.input_tokens_24h +
+    totals.input_tokens_7d +
+    totals.output_tokens_24h +
+    totals.output_tokens_7d >
+    0;
   const topGoals = usage.goals.slice(0, 5);
   return (
     <Card>
@@ -9442,18 +9448,24 @@ function UsageStatsPanel({ usage }: { usage?: UsageSummary | null }) {
             label="Progress"
             value={`${formatUsageCount(totals.progress_signal_run_count_24h)} / ${formatUsageCount(totals.progress_signal_run_count_7d)}`}
           />
-          <UsageMetric
-            label="Tokens 24h / 7d"
-            value={`${formatTokenCount(totals.input_tokens_24h + totals.output_tokens_24h)} / ${formatTokenCount(totals.input_tokens_7d + totals.output_tokens_7d)}`}
-          />
-          <UsageMetric
-            label="Cost 24h / 7d"
-            value={`${formatCostUsd(totals.cost_usd_24h)} / ${formatCostUsd(totals.cost_usd_7d)}`}
-          />
-          <UsageMetric
-            label="Runtime 24h / 7d"
-            value={`${formatDurationMs(totals.duration_ms_24h)} / ${formatDurationMs(totals.duration_ms_7d)}`}
-          />
+          {hasUsage ? (
+            <>
+              <UsageMetric
+                label="Tokens 24h / 7d"
+                value={`${formatTokenCount(totals.input_tokens_24h + totals.output_tokens_24h)} / ${formatTokenCount(totals.input_tokens_7d + totals.output_tokens_7d)}`}
+              />
+              <UsageMetric
+                label="Cost 24h / 7d"
+                value={`${formatCostUsd(totals.cost_usd_24h)} / ${formatCostUsd(totals.cost_usd_7d)}`}
+              />
+              <UsageMetric
+                label="Runtime 24h / 7d"
+                value={`${formatDurationMs(totals.duration_ms_24h)} / ${formatDurationMs(totals.duration_ms_7d)}`}
+              />
+            </>
+          ) : (
+            <UsageMetric label="Cost data" value="pending ingestion" />
+          )}
         </div>
         {topGoals.length ? (
           <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-zinc-800">

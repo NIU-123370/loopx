@@ -211,3 +211,40 @@ def test_build_usage_summary_rounds_cost_to_avoid_float_drift() -> None:
     }
     summary = build_usage_summary(history, parse_timestamp=_identity_parse)
     assert summary["totals"]["cost_usd_24h"] == 0.3
+
+
+def test_collect_usage_for_run_rejects_bool_tokens() -> None:
+    # bool is not a valid token count and must not be accepted as 1.
+    sample = collect_usage_for_run(
+        {"usage": {"input_tokens": True, "output_tokens": 10}}
+    )
+    assert sample is not None
+    assert sample.input_tokens == 0
+    assert sample.output_tokens == 10
+
+
+def test_collect_usage_for_run_rejects_negative_tokens() -> None:
+    sample = collect_usage_for_run(
+        {"usage": {"input_tokens": -100, "output_tokens": 10}}
+    )
+    assert sample is not None
+    assert sample.input_tokens == 0
+    assert sample.output_tokens == 10
+
+
+def test_collect_usage_for_run_rejects_non_numeric_tokens() -> None:
+    # a numeric string is not coerced; only real numbers count.
+    sample = collect_usage_for_run(
+        {"usage": {"input_tokens": "100", "output_tokens": 10}}
+    )
+    assert sample is not None
+    assert sample.input_tokens == 0
+    assert sample.output_tokens == 10
+
+
+def test_collect_usage_for_run_rejects_negative_cost() -> None:
+    sample = collect_usage_for_run(
+        {"usage": {"input_tokens": 1, "output_tokens": 1, "cost_usd": -0.5}}
+    )
+    assert sample is not None
+    assert sample.cost_usd == 0.0
