@@ -48,6 +48,7 @@ TODO_OPTION_FIELDS = (
     ("--resume-when", "resume_when"),
     ("--validation-command", "validation_command"),
     ("--validation-label", "validation_label"),
+    ("--validation-timeout-seconds", "validation_timeout_seconds"),
     ("--clear-resume-when", "clear_resume_when"),
     ("--target-key", "monitor_target_key"),
     ("--cadence", "cadence"),

@@ -219,6 +219,16 @@ def register_todo_command(
         "--validation-label",
         help="Optional public-safe label for the validation receipt.",
     )
+    todo_parser.add_argument(
+        "--validation-timeout-seconds",
+        type=int,
+        help=(
+            "Per-todo timeout for the caller-approved validation command. "
+            "Only meaningful with --validation-command on `todo add`; must be "
+            "1-29 so a timed-out validation still produces a typed receipt "
+            "inside the 30s outer subprocess budget. Defaults to 20."
+        ),
+    )
     todo_parser.add_argument("--reason", help="Public-safe reason for blocked/deferred/supersede transitions.")
     todo_parser.add_argument(
         "--authority-reason",
@@ -618,6 +628,7 @@ def handle_todo_command(
                 resume_when=args.resume_when,
                 validation_command=args.validation_command,
                 validation_label=args.validation_label,
+                validation_timeout_seconds=args.validation_timeout_seconds,
                 monitor_metadata={
                     "target_key": args.monitor_target_key,
                     "cadence": args.cadence,

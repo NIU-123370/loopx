@@ -73,6 +73,7 @@ from .control_plane.todos.completion_policy import (
 )
 from .control_plane.todos.completion_fence import completed_todo_replay
 from .control_plane.todos.completion_validation import (
+    COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS,
     run_completion_validation_gate,
 )
 from .control_plane.todos.event_writeback import (
@@ -576,10 +577,27 @@ def add_todo_to_lines(
     resume_when: str | None = None,
     validation_command: str | None = None,
     validation_label: str | None = None,
+    validation_timeout_seconds: int | None = None,
     monitor_metadata: dict[str, Any] | None = None,
     evidence: str | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
+    if validation_timeout_seconds is not None:
+        if not validation_command:
+            raise ValueError(
+                "--validation-timeout-seconds requires --validation-command"
+            )
+        if not (
+            1
+            <= validation_timeout_seconds
+            <= COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS
+        ):
+            raise ValueError(
+                "--validation-timeout-seconds must be between 1 and "
+                f"{COMPLETION_VALIDATION_TIMEOUT_MAX_SECONDS} (the outer "
+                "CLI/MCP subprocess budget is 30s, and a timed-out "
+                "validation must still produce a typed receipt)"
+            )
     if role == "agent" and blocks_agent:
         raise ValueError(
             "blocks_agent is only valid for user gates; use excluded_agents for "
@@ -657,6 +675,11 @@ def add_todo_to_lines(
             resume_when=normalized_resume_when,
             validation_command=validation_command,
             validation_label=validation_label,
+            validation_timeout_seconds=(
+                str(validation_timeout_seconds)
+                if validation_timeout_seconds is not None
+                else None
+            ),
             **normalized_monitor_metadata,
             evidence=evidence,
             updated_at=updated_at,
@@ -845,6 +868,7 @@ def add_goal_todo(
     resume_when: str | None = None,
     validation_command: str | None = None,
     validation_label: str | None = None,
+    validation_timeout_seconds: int | None = None,
     monitor_metadata: dict[str, Any] | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
@@ -1045,6 +1069,7 @@ def add_goal_todo(
             resume_when=normalized_resume_when,
             validation_command=validation_command,
             validation_label=validation_label,
+            validation_timeout_seconds=validation_timeout_seconds,
             monitor_metadata=normalized_monitor_metadata,
             updated_at=updated_at,
         )

@@ -1138,6 +1138,7 @@ _TODO_METADATA_FIELD_SCHEMA = (
             "completion_turn_key",
             "validation_command",
             "validation_label",
+            "validation_timeout_seconds",
         )
     ),
     _TodoMetadataField(
@@ -1276,6 +1277,7 @@ def format_todo_metadata_line(
     completion_turn_key: str | None = None,
     validation_command: str | None = None,
     validation_label: str | None = None,
+    validation_timeout_seconds: str | None = None,
     reason: str | None = None,
     completed_at: str | None = None,
     updated_at: str | None = None,

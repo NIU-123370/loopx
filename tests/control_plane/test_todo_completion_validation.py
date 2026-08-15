@@ -78,6 +78,7 @@ def _add_todo(
     *,
     validation_command: str | None = None,
     validation_label: str | None = None,
+    validation_timeout_seconds: int | None = None,
 ) -> dict:
     return add_goal_todo(
         registry_path=registry,
@@ -88,6 +89,7 @@ def _add_todo(
         claimed_by=AGENT,
         validation_command=validation_command,
         validation_label=validation_label,
+        validation_timeout_seconds=validation_timeout_seconds,
     )
 
 
@@ -275,3 +277,44 @@ def test_terminal_replay_short_circuits_before_validation(
     # Replay short-circuits before the validation gate; the command is not re-run.
     assert calls["count"] == 1
     assert replay["ok"] is True
+
+
+def test_per_todo_validation_timeout_overrides_default(tmp_path: Path) -> None:
+    registry, state = _write_fixture(tmp_path)
+    # A 1s per-todo timeout cuts the sleeping command off long before the 20s
+    # module default, and the typed receipt reports the declared value.
+    todo = _add_todo(
+        registry,
+        validation_command=_SLEEP_COMMAND,
+        validation_timeout_seconds=1,
+    )
+    result = complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=str(todo["todo_id"]),
+        agent_id=AGENT,
+        evidence="claim of completion",
+    )
+    assert result["ok"] is False
+    assert result["validation_blocked_completion"] is True
+    receipt = result["validation"]
+    assert receipt["passed"] is False
+    assert receipt["status"] == "timeout"
+    assert "timed out after 1s" in receipt["summary"]
+    assert _agent_todo(state, str(todo["todo_id"]))["status"] == "open"
+
+
+def test_validation_timeout_out_of_range_rejected(tmp_path: Path) -> None:
+    registry, _state = _write_fixture(tmp_path)
+    with pytest.raises(ValueError, match="1 and 29"):
+        _add_todo(
+            registry,
+            validation_command=_PASS_COMMAND,
+            validation_timeout_seconds=30,
+        )
+
+
+def test_validation_timeout_requires_validation_command(tmp_path: Path) -> None:
+    registry, _state = _write_fixture(tmp_path)
+    with pytest.raises(ValueError, match="requires --validation-command"):
+        _add_todo(registry, validation_timeout_seconds=5)
