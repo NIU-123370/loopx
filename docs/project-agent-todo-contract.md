@@ -581,7 +581,8 @@ transition. This closeout records `self_merged=false` and does not
 create a successor review todo for observation-only work.
 
 User-role todos may still write `done` through `todo update --status done`;
-when the todo declares `validation_command` (or `validation_command_json`),
+when the todo declares `validation_command` (or the `validation_command_argv`
+declared via `--validation-command-json`),
 that update runs the same completion validation gate as `todo complete` and
 fails closed with a typed `validation_blocked_completion` receipt instead of
 committing `done`. Todos without a declared command keep the unchanged fast
