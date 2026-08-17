@@ -1254,6 +1254,35 @@ def update_goal_todo(
         project=project,
         state_file=state_file,
     )
+    # Run caller-approved validation BEFORE acquiring the mutation lock when
+    # this update writes a completion, mirroring complete_goal_todo's pre-lock
+    # gate (the MUTATION lock deadline is 5s). Agent-role completions keep the
+    # existing in-lock guard error below, so this covers the remaining paths
+    # that can write `status=done` directly (user-role todos with a declared
+    # validation command). Returns a typed failure payload (ok=False) when
+    # validation blocks; otherwise None.
+    if status:
+        try:
+            update_completes_todo = normalize_todo_status(status) == TODO_STATUS_DONE
+        except ValueError:
+            update_completes_todo = False  # invalid status surfaces in-lock, unchanged
+        if update_completes_todo:
+            update_block_match = find_todo_block(
+                resolved_state_file.read_text(encoding="utf-8").splitlines(),
+                todo_id=todo_id,
+                role=role,
+            )
+            if update_block_match and (role or update_block_match[0]) != "agent":
+                validation_failure = run_completion_validation_gate(
+                    state_file=resolved_state_file,
+                    todo_id=todo_id,
+                    role=role,
+                    registry_path=registry_path,
+                    goal_id=goal_id,
+                    dry_run=dry_run,
+                )
+                if validation_failure is not None:
+                    return validation_failure
     with exclusive_file_lock(
         resolved_state_file,
         agent_id=agent_id or claimed_by,
