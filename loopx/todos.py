@@ -1262,11 +1262,10 @@ def update_goal_todo(
     # validation command). Returns a typed failure payload (ok=False) when
     # validation blocks; otherwise None.
     if status:
-        try:
-            update_completes_todo = normalize_todo_status(status) == TODO_STATUS_DONE
-        except ValueError:
-            update_completes_todo = False  # invalid status surfaces in-lock, unchanged
-        if update_completes_todo:
+        # normalize_todo_status returns None (never raises) for an invalid
+        # status, which simply skips this gate; the in-lock write path then
+        # surfaces the same invalid-status error as before.
+        if normalize_todo_status(status) == TODO_STATUS_DONE:
             update_block_match = find_todo_block(
                 resolved_state_file.read_text(encoding="utf-8").splitlines(),
                 todo_id=todo_id,
