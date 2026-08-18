@@ -10,8 +10,9 @@ CLI_COMMANDS = ROOT / "loopx" / "cli_commands"
 
 DEFAULT_MAX_LINES = 1000
 LEGACY_MODULE_LIMITS = {
-    "benchmark_review_lifecycle.py": 1300,
-    "terminal_bench_environment_result.py": 1280,
+    # benchmark_review_lifecycle.py and terminal_bench_environment_result.py
+    # were removed by the native-runner benchmark reset (#3267); their legacy
+    # budgets left with them.
 }
 STARTER_MODULE_LIMITS = {
     "starter.py": 180,
