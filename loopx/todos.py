@@ -484,7 +484,7 @@ def list_goal_todos(
 
     matched_todo_count = len(todos)
     agent_lane_hot_path = bool(
-        normalized_agent_id
+        normalized_agent_id and limit is None
         and role is None
         and status is None
         and normalized_todo_id is None

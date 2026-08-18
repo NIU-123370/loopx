@@ -9,17 +9,35 @@ from pathlib import Path
 from loopx.todos import list_goal_todos
 
 GOAL_ID = "todo-list-explicit-limit-goal"
+AGENT_ID = "codex-explicit-limit"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _todo_line(*, todo_id: str, text: str) -> list[str]:
+def _todo_line(
+    *,
+    todo_id: str,
+    text: str,
+    status: str = "open",
+    metadata: str = "",
+) -> list[str]:
+    marker = "x" if status == "done" else " "
+    metadata_suffix = f" {metadata}" if metadata else ""
     return [
-        f"- [ ] {text}",
-        f"  <!-- loopx:todo todo_id={todo_id} status=open -->",
+        f"- [{marker}] {text}",
+        (
+            "  <!-- loopx:todo "
+            f"todo_id={todo_id} status={status}{metadata_suffix} -->"
+        ),
     ]
 
 
-def _write_fixture(tmp_path: Path) -> Path:
+def _write_fixture(
+    tmp_path: Path,
+    *,
+    item_count_per_role: int = 8,
+    agent_id: str | None = None,
+    terminal_agent_index: int | None = None,
+) -> Path:
     project = tmp_path / "project"
     runtime = tmp_path / "runtime"
     state_relative = Path(".local/goals") / GOAL_ID / "ACTIVE_GOAL_STATE.md"
@@ -37,19 +55,23 @@ def _write_fixture(tmp_path: Path) -> Path:
         "## User Todo",
         "",
     ]
-    for index in range(8):
+    for index in range(item_count_per_role):
         lines.extend(
             _todo_line(
                 todo_id=f"todo_user_open_{index:03d}",
                 text=f"Owner decision {index} for the crowded goal.",
+                metadata=(f"bound_agent={agent_id}" if agent_id else ""),
             )
         )
     lines.extend(["", "## Agent Todo", ""])
-    for index in range(8):
+    for index in range(item_count_per_role):
+        status = "done" if index == terminal_agent_index else "open"
         lines.extend(
             _todo_line(
-                todo_id=f"todo_agent_open_{index:03d}",
+                todo_id=f"todo_agent_{status}_{index:03d}",
                 text=f"Advancement step {index} for the crowded goal.",
+                status=status,
+                metadata=(f"claimed_by={agent_id}" if agent_id else ""),
             )
         )
     state_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -141,6 +163,35 @@ def test_explicit_limit_is_stable_under_role_filter(tmp_path: Path) -> None:
     assert payload["returned_todo_count"] == 3
     assert payload["todo_list_projection"]["matched_todo_count"] == 8
     assert payload["unfiltered_todo_count"] == 8
+
+
+def test_explicit_limit_takes_precedence_over_agent_lane_hot_path(
+    tmp_path: Path,
+) -> None:
+    registry_path = _write_fixture(
+        tmp_path,
+        item_count_per_role=18,
+        agent_id=AGENT_ID,
+        terminal_agent_index=5,
+    )
+
+    payload = list_goal_todos(
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        limit=20,
+    )
+
+    # An explicit limit selects the disclosed cold path instead of layering the
+    # existing 12-item agent-lane hot-path cap on top of the caller's limit.
+    assert payload["todo_count"] == len(payload["todos"]) == 36
+    assert payload["returned_todo_count"] == 36
+    assert payload["todo_list_projection"]["matched_todo_count"] == 36
+    assert payload["todo_list_projection"]["item_limit_per_role"] == 20
+    assert payload["todo_list_projection"]["view"] == "explicit_limit_cold_path"
+    assert "payload_compaction" not in payload["user_todos"]
+    assert "payload_compaction" not in payload["agent_todos"]
+    assert any(item["status"] == "done" for item in payload["agent_todos"]["items"])
 
 
 def test_default_payload_keeps_the_pre_limit_shape(tmp_path: Path) -> None:
