@@ -1,13 +1,24 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 AGENT_LANE_TODO_LIST_PROJECTION_SCHEMA_VERSION = "agent_lane_todo_list_projection_v0"
 AGENT_LANE_TODO_LIST_SUMMARY_SCHEMA_VERSION = (
     "agent_lane_todo_list_summary_compaction_v0"
 )
+EXPLICIT_LIMIT_TODO_LIST_SUMMARY_SCHEMA_VERSION = (
+    "explicit_limit_todo_list_summary_compaction_v0"
+)
 AGENT_LANE_TODO_LIST_ITEM_LIMIT = 12
 AGENT_LANE_TODO_LIST_TEXT_LIMIT = 180
+AGENT_LANE_HOT_PATH_VIEW: Literal["agent_lane_hot_path"] = "agent_lane_hot_path"
+EXPLICIT_LIMIT_COLD_PATH_VIEW: Literal["explicit_limit_cold_path"] = (
+    "explicit_limit_cold_path"
+)
+TodoListProjectionView = Literal[
+    "agent_lane_hot_path",
+    "explicit_limit_cold_path",
+]
 
 _RETAINED_LANE_LIMITS = {
     "items": AGENT_LANE_TODO_LIST_ITEM_LIMIT,
@@ -176,6 +187,45 @@ def compact_agent_lane_todo_summary(
     return compact
 
 
+def compact_explicit_limit_todo_summary(
+    summary: dict[str, Any],
+    *,
+    role: str,
+    item_limit: int,
+) -> dict[str, Any]:
+    """Bound every item-bearing lane for the explicit-limit cold path."""
+    compact: dict[str, Any] = {}
+    compacted_lanes: dict[str, dict[str, int]] = {}
+    omitted_nonempty_dict_count = 0
+    for key, value in summary.items():
+        if isinstance(value, list):
+            compact[key] = [_compact_item(item) for item in value[:item_limit]]
+            if len(value) > item_limit:
+                compacted_lanes[key] = {
+                    "shown": item_limit,
+                    "total": len(value),
+                }
+            continue
+        if isinstance(value, dict):
+            if key in _RETAINED_DICTS:
+                compact[key] = value
+            else:
+                omitted_nonempty_dict_count += bool(value)
+            continue
+        compact[key] = value
+    compact["payload_compaction"] = {
+        "schema_version": EXPLICIT_LIMIT_TODO_LIST_SUMMARY_SCHEMA_VERSION,
+        "view": EXPLICIT_LIMIT_COLD_PATH_VIEW,
+        "role": role,
+        "item_limit": item_limit,
+        "item_text_limit": AGENT_LANE_TODO_LIST_TEXT_LIMIT,
+        "compacted_lanes": compacted_lanes,
+        "omitted_nonempty_dict_count": omitted_nonempty_dict_count,
+        "full_detail_cold_path": "todo list without --limit or active state",
+    }
+    return compact
+
+
 def compact_todo_projection_overlay(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -193,7 +243,7 @@ def todo_list_projection_contract(
     *,
     matched_todo_count: int,
     returned_todo_count: int,
-    view: str = "agent_lane_hot_path",
+    view: TodoListProjectionView = AGENT_LANE_HOT_PATH_VIEW,
     item_limit_per_role: int = AGENT_LANE_TODO_LIST_ITEM_LIMIT,
     full_detail_cold_paths: tuple[str, ...] = (
         "todo list with --role, --status, or --todo-id",

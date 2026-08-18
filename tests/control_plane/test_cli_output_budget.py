@@ -264,6 +264,45 @@ def _write_user_todo_fixture(state_file: Path) -> None:
     )
 
 
+def _write_todo_list_limit_stress_fixture(state_file: Path) -> None:
+    lines = [
+        "---",
+        "status: active",
+        "updated_at: 2026-01-01T00:00:00+00:00",
+        "---",
+        "",
+        "# Todo List Limit Stress Fixture",
+        "",
+        "## Agent Todo",
+        "",
+    ]
+    for index in range(100):
+        lines.extend(
+            [
+                f"- [ ] Observe bounded public monitor {index:03d}.",
+                (
+                    "  <!-- loopx:todo "
+                    f"todo_id=todo_monitor_{index:03d} status=open "
+                    "task_class=continuous_monitor "
+                    f"action_kind=observe_{index % 4} claimed_by=codex-alpha -->"
+                ),
+            ]
+        )
+    for index in range(100):
+        lines.extend(
+            [
+                f"- [ ] Resolve bounded public blocker {index:03d}.",
+                (
+                    "  <!-- loopx:todo "
+                    f"todo_id=todo_blocker_{index:03d} status=blocked "
+                    "task_class=blocker "
+                    f"action_kind=resolve_{index % 4} claimed_by=codex-alpha -->"
+                ),
+            ]
+        )
+    state_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _invoke_cli(args: list[str]) -> tuple[int, str]:
     output = io.StringIO()
     ambient_thread_id = os.environ.pop("CODEX_THREAD_ID", None)
@@ -1433,6 +1472,52 @@ def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
         text=default_text,
         measurement=measure_cli_output(default_text, output_format="json"),
     )
+
+
+def test_todo_list_explicit_limit_bounds_monitor_and_blocker_lanes(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "todo-list-limit-lanes") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root,
+            SCENARIOS[1],
+        )
+        _write_todo_list_limit_stress_fixture(state_file)
+        command = _mode_variant_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["todo_list_limited"]
+        exit_code, text = _invoke_cli(command)
+
+    assert exit_code == 0, text
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_limited"]
+    measurement = measure_cli_output(text, output_format="json")
+    assert_cli_output_mode_variant(
+        spec,
+        output_format="json",
+        text=text,
+        measurement=measurement,
+    )
+    payload = json.loads(text)
+    summary = payload["agent_todos"]
+    assert summary["total_count"] == 200
+    assert len(summary["items"]) == 3
+    assert len(summary["monitor_open_items"]) == 3
+    assert len(summary["blocker_items"]) == 3
+    compaction = summary["payload_compaction"]
+    assert compaction["view"] == "explicit_limit_cold_path"
+    assert compaction["item_limit"] == 3
+    assert compaction["compacted_lanes"]["monitor_open_items"] == {
+        "shown": 3,
+        "total": 100,
+    }
+    assert compaction["compacted_lanes"]["blocker_items"] == {
+        "shown": 3,
+        "total": 100,
+    }
 
 
 def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(

@@ -90,6 +90,7 @@ from .control_plane.todos.line_update import (
 )
 from .control_plane.todos.list_projection import (
     compact_agent_lane_todo_summary,
+    compact_explicit_limit_todo_summary,
     compact_todo_projection_overlay,
     todo_item_relations,
     todo_list_projection_contract,
@@ -478,6 +479,12 @@ def list_goal_todos(
             rollout_events=rollout_events,
             item_limit=limit,
         )
+        if limit is not None:
+            summary = compact_explicit_limit_todo_summary(
+                summary,
+                role=item_role,
+                item_limit=limit,
+            )
         summaries[key] = summary
         todos.extend(summary.get("items") or [])
         uncapped_todo_count += int(summary.get("total_count") or 0)

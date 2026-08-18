@@ -189,8 +189,10 @@ def test_explicit_limit_takes_precedence_over_agent_lane_hot_path(
     assert payload["todo_list_projection"]["matched_todo_count"] == 36
     assert payload["todo_list_projection"]["item_limit_per_role"] == 20
     assert payload["todo_list_projection"]["view"] == "explicit_limit_cold_path"
-    assert "payload_compaction" not in payload["user_todos"]
-    assert "payload_compaction" not in payload["agent_todos"]
+    for role_key in ("user_todos", "agent_todos"):
+        compaction = payload[role_key]["payload_compaction"]
+        assert compaction["view"] == "explicit_limit_cold_path"
+        assert compaction["item_limit"] == 20
     assert any(item["status"] == "done" for item in payload["agent_todos"]["items"])
 
 
