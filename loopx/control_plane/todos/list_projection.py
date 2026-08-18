@@ -193,17 +193,20 @@ def todo_list_projection_contract(
     *,
     matched_todo_count: int,
     returned_todo_count: int,
+    view: str = "agent_lane_hot_path",
+    item_limit_per_role: int = AGENT_LANE_TODO_LIST_ITEM_LIMIT,
+    full_detail_cold_paths: tuple[str, ...] = (
+        "todo list with --role, --status, or --todo-id",
+        "todo list without --agent-id",
+        "active state",
+    ),
 ) -> dict[str, Any]:
     return {
         "schema_version": AGENT_LANE_TODO_LIST_PROJECTION_SCHEMA_VERSION,
-        "view": "agent_lane_hot_path",
+        "view": view,
         "matched_todo_count": matched_todo_count,
         "returned_todo_count": returned_todo_count,
-        "item_limit_per_role": AGENT_LANE_TODO_LIST_ITEM_LIMIT,
+        "item_limit_per_role": item_limit_per_role,
         "counts_cover_full_match": True,
-        "full_detail_cold_paths": [
-            "todo list with --role, --status, or --todo-id",
-            "todo list without --agent-id",
-            "active state",
-        ],
+        "full_detail_cold_paths": list(full_detail_cold_paths),
     }

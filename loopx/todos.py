@@ -229,6 +229,7 @@ def filtered_todo_summary(
     agent_id: str | None = None,
     resume_source_items: list[dict[str, Any]] | None = None,
     rollout_events: list[dict[str, Any]] | None = None,
+    item_limit: int | None = None,
 ) -> dict[str, Any]:
     items = list((summary or {}).get("items") or [])
     normalized_status = normalize_todo_status(status)
@@ -269,7 +270,7 @@ def filtered_todo_summary(
             role=role,
             resume_source_items=resume_source_items,
             rollout_events=rollout_events,
-            item_limit=None,
+            item_limit=item_limit,
         )
         or empty_todo_summary(role=role)
     )
@@ -393,6 +394,7 @@ def list_goal_todos(
     project: Path | None = None,
     state_file: Path | None = None,
     runtime_root_arg: str | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
     if todo_id and not normalized_todo_id:
@@ -400,6 +402,8 @@ def list_goal_todos(
     normalized_agent_id = normalize_todo_claimed_by(agent_id) if agent_id else None
     if agent_id and not normalized_agent_id:
         raise ValueError("agent_id must be a public-safe agent token such as codex-main-control")
+    if limit is not None and limit < 1:
+        raise ValueError("todo list --limit must be at least 1")
     registry = load_registry(registry_path)
     goal, resolved_project, resolved_state_file = resolve_goal_state(
         registry=registry,
@@ -459,6 +463,7 @@ def list_goal_todos(
     summaries: dict[str, dict[str, Any]] = {}
     todos: list[dict[str, Any]] = []
     unfiltered_count = 0
+    uncapped_todo_count = 0
     for item_role in roles:
         key = f"{item_role}_todos"
         raw_summary = fields.get(key) if isinstance(fields, dict) else None
@@ -471,9 +476,11 @@ def list_goal_todos(
             agent_id=normalized_agent_id,
             resume_source_items=resume_source_items,
             rollout_events=rollout_events,
+            item_limit=limit,
         )
         summaries[key] = summary
         todos.extend(summary.get("items") or [])
+        uncapped_todo_count += int(summary.get("total_count") or 0)
 
     matched_todo_count = len(todos)
     agent_lane_hot_path = bool(
@@ -525,6 +532,20 @@ def list_goal_todos(
         payload["todo_list_projection"] = todo_list_projection_contract(
             matched_todo_count=matched_todo_count,
             returned_todo_count=len(todos),
+        )
+    if limit is not None:
+        payload["explicit_limit"] = limit
+        payload["unfiltered_todo_count"] = unfiltered_count
+        payload["returned_todo_count"] = len(todos)
+        payload["todo_list_projection"] = todo_list_projection_contract(
+            matched_todo_count=uncapped_todo_count,
+            returned_todo_count=len(todos),
+            view="explicit_limit_cold_path",
+            item_limit_per_role=limit,
+            full_detail_cold_paths=(
+                "todo list without --limit",
+                "active state",
+            ),
         )
     if normalized_todo_id:
         payload["todo_id_filter"] = normalized_todo_id

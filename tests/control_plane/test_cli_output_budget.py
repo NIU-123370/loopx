@@ -680,6 +680,8 @@ def _mode_variant_commands(
         "heartbeat_prompt_brief": common + ["heartbeat-prompt", "--brief", *heartbeat],
         "heartbeat_prompt_compact": common + ["heartbeat-prompt", "--compact", *heartbeat],
         "heartbeat_prompt_full": common + ["heartbeat-prompt", "--full", *heartbeat],
+        "todo_list_limited": common
+        + ["todo", "list", "--goal-id", GOAL_ID, "--limit", "3"],
     }
 
 
@@ -737,6 +739,7 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_brief",
         "heartbeat_prompt_compact",
         "heartbeat_prompt_full",
+        "todo_list_limited",
     }
     assert set(CLI_OUTPUT_MODE_VARIANT_BY_ID) == expected_variants
     assert manifest["mode_variant_count"] == len(expected_variants)
@@ -1350,6 +1353,86 @@ def test_explicit_compact_and_detail_modes_are_characterized(tmp_path: Path) -> 
                 text=text,
                 measurement=measurement,
             )
+
+
+def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "todo-list-limit") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root,
+            SCENARIOS[1],
+        )
+        limited_command = _mode_variant_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["todo_list_limited"]
+        cold_default_command = [
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime),
+            "--format",
+            "json",
+            "todo",
+            "list",
+            "--goal-id",
+            GOAL_ID,
+        ]
+        default_command = _surface_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["todo_list"]
+
+        limited_exit_code, limited_text = _invoke_cli(limited_command)
+        cold_default_exit_code, cold_default_text = _invoke_cli(cold_default_command)
+        default_exit_code, default_text = _invoke_cli(default_command)
+
+    assert limited_exit_code == 0, limited_text
+    assert cold_default_exit_code == 0, cold_default_text
+    assert default_exit_code == 0, default_text
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_limited"]
+    measurement = measure_cli_output(limited_text, output_format="json")
+    assert_cli_output_mode_variant(
+        spec,
+        output_format="json",
+        text=limited_text,
+        measurement=measurement,
+    )
+    limited_payload = json.loads(limited_text)
+    assert limited_payload["explicit_limit"] == 3
+    assert limited_payload["todo_list_projection"]["view"] == (
+        "explicit_limit_cold_path"
+    )
+    assert limited_payload["todo_list_projection"]["matched_todo_count"] == 36
+    assert limited_payload["returned_todo_count"] == 3
+    assert len(limited_payload["agent_todos"]["items"]) == 3
+    assert limited_payload["agent_todos"]["total_count"] == 36
+    assert int(measurement["chars"]) < len(cold_default_text)
+
+    cold_default_payload = json.loads(cold_default_text)
+    assert cold_default_payload["todo_count"] == 36
+    assert len(cold_default_payload["todos"]) == 36
+    for absent_key in ("explicit_limit", "returned_todo_count", "todo_list_projection"):
+        assert absent_key not in cold_default_payload
+
+    default_payload = json.loads(default_text)
+    assert "explicit_limit" not in default_payload
+    assert "returned_todo_count" in default_payload
+    assert default_payload["todo_list_projection"]["view"] == "agent_lane_hot_path"
+    assert_cli_output_baseline(
+        CLI_OUTPUT_BUDGET_BY_ID["todo_list"],
+        scenario="crowded",
+        output_format="json",
+        text=default_text,
+        measurement=measure_cli_output(default_text, output_format="json"),
+    )
 
 
 def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
