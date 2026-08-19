@@ -226,7 +226,19 @@ def compact_explicit_limit_todo_summary(
     return compact
 
 
-def compact_todo_projection_overlay(value: Any) -> Any:
+AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH = (
+    "todo list without --agent-id or active state"
+)
+EXPLICIT_LIMIT_OVERLAY_FULL_DETAIL_COLD_PATH = (
+    "todo list without --limit or active state"
+)
+
+
+def compact_todo_projection_overlay(
+    value: Any,
+    *,
+    full_detail_cold_path: str = AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH,
+) -> Any:
     if not isinstance(value, dict):
         return value
     compact = {
@@ -235,7 +247,7 @@ def compact_todo_projection_overlay(value: Any) -> Any:
     for key, child in value.items():
         if isinstance(child, list):
             compact[f"{key.removesuffix('_todo_ids')}_count"] = len(child)
-    compact["full_detail_cold_path"] = "todo list without --agent-id or active state"
+    compact["full_detail_cold_path"] = full_detail_cold_path
     return compact
 
 

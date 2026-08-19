@@ -89,6 +89,8 @@ from .control_plane.todos.line_update import (
     upsert_todo_metadata,
 )
 from .control_plane.todos.list_projection import (
+    AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH,
+    EXPLICIT_LIMIT_OVERLAY_FULL_DETAIL_COLD_PATH,
     compact_agent_lane_todo_summary,
     compact_explicit_limit_todo_summary,
     compact_todo_projection_overlay,
@@ -570,8 +572,15 @@ def list_goal_todos(
         if projection_fields.get("state_event_projection"):
             payload["state_event_projection"] = projection_fields["state_event_projection"]
         payload["projection_overlay"] = (
-            compact_todo_projection_overlay(projection_overlay)
-            if agent_lane_hot_path
+            compact_todo_projection_overlay(
+                projection_overlay,
+                full_detail_cold_path=(
+                    EXPLICIT_LIMIT_OVERLAY_FULL_DETAIL_COLD_PATH
+                    if limit is not None
+                    else AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH
+                ),
+            )
+            if agent_lane_hot_path or limit is not None
             else projection_overlay
         )
     if projection_fields.get("state_event_projection_warning"):
