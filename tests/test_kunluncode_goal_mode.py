@@ -16,6 +16,7 @@ from loopx.goal_mode_mcp import (
     GoalModeMCPControlPlane,
     create_fastmcp_server,
 )
+from loopx.control_plane.effect_program import SettlementIdentity
 from loopx.kunluncode_goal_mode import cli
 from loopx.kunluncode_goal_mode.app_server import (
     NATIVE_GOAL_MODES,
@@ -114,11 +115,48 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
 
     def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(command)
-        payload = (
-            '{"ok": true, "completed": true, "status": "done"}'
-            if "complete" in command
-            else '{"ok": true}'
-        )
+        if "--turn-instance-id" not in command:
+            payload = '{"ok": true}'
+        else:
+            args = command[command.index("json") + 1 :]
+            identity = SettlementIdentity(
+                goal_id="shared-goal",
+                agent_id="kunlun",
+                todo_id="todo_333333333333",
+                turn_instance_id=args[args.index("--turn-instance-id") + 1],
+            )
+            if "should-run" in command:
+                payload = json.dumps(
+                    {
+                        "ok": True,
+                        "should_run": True,
+                        "selected_todo": {"todo_id": "todo_333333333333"},
+                    }
+                )
+            elif "complete" in command:
+                payload = json.dumps(
+                    {
+                        "ok": True,
+                        "completed": True,
+                        "status": "done",
+                        "completion_continuation": (
+                            "no_followup"
+                            if "--no-follow-up" in command
+                            else "active_goal"
+                        ),
+                        "settlement_identity": identity.as_dict(),
+                        "settlement_result": {"failure": None},
+                    }
+                )
+            else:
+                payload = json.dumps(
+                    {
+                        "ok": True,
+                        "appended": True,
+                        "settlement_identity": identity.as_dict(),
+                        "settlement_result": {"failure": None},
+                    }
+                )
         return subprocess.CompletedProcess(command, 0, payload, "")
 
     monkeypatch.setattr(goal_mode_mcp.subprocess, "run", capture)
@@ -133,17 +171,27 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
     assert json.loads(control.claim_task("todo-1", "kunlun"))["ok"] is True
     assert commands[-1][-4:] == ["--claimed-by", "kunlun", "--agent-id", "kunlun"]
 
+    command_count = len(commands)
     output = control.complete_task(
-        "todo-1",
+        "todo_333333333333",
         "kunlun",
         "focused check passed",
         task_lease_idempotency_key="lease-fixture",
         no_follow_up=True,
     )
-    assert "spend-slot" in output
-    assert "--no-follow-up" in commands[-2]
-    assert "--task-lease-idempotency-key" in commands[-2]
-    assert commands[-1][-2:] == ["--agent-id", "kunlun"]
+    completed = json.loads(output)
+    assert completed["ok"] is True
+    settlement_commands = commands[command_count:]
+    assert len(settlement_commands) == 5
+    first_completion = settlement_commands[1]
+    terminal_closeout = settlement_commands[-1]
+    assert "--no-follow-up" not in first_completion
+    assert "--no-follow-up" in terminal_closeout
+    assert "--task-lease-idempotency-key" in first_completion
+    assert "--task-lease-idempotency-key" in terminal_closeout
+    assert completed["settlement"]["terminal_closeout"][
+        "completion_continuation"
+    ] == "no_followup"
 
 
 def test_mcp_spends_only_after_typed_completed_state(
@@ -166,15 +214,212 @@ def test_mcp_spends_only_after_typed_completed_state(
 
     def incomplete(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(command)
-        return subprocess.CompletedProcess(command, 0, '{"ok": true}', "")
+        payload = (
+            json.dumps(
+                {
+                    "ok": True,
+                    "should_run": True,
+                    "selected_todo": {"todo_id": "todo_111111111111"},
+                }
+            )
+            if "should-run" in command
+            else '{"ok": true}'
+        )
+        return subprocess.CompletedProcess(command, 0, payload, "")
 
     monkeypatch.setattr(goal_mode_mcp.subprocess, "run", incomplete)
 
-    output = control.complete_task("todo-1", "claude", "not yet complete")
+    output = control.complete_task("todo_111111111111", "claude", "not yet complete")
 
     assert json.loads(output)["ok"] is True
+    assert len(commands) == 2
+    assert not any("spend-slot" in command for command in commands)
+
+
+def test_complete_task_spends_bound_to_selected_todo_and_refreshes_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control = GoalModeMCPControlPlane(
+        GoalModeMCPConfig(
+            server_name="loopx-test",
+            runtime_profile="claude_code",
+            legacy_host_surface="claude_code",
+        ),
+        lambda: {
+            "goal_id": "shared-goal",
+            "registry": "/project/.loopx/registry.json",
+            "agent_id": "claude",
+        },
+    )
+    commands: list[list[str]] = []
+    control.command_prefix = lambda: ["loopx"]
+
+    def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        args = command[command.index("json") + 1 :]
+        identity = SettlementIdentity(
+            goal_id="shared-goal",
+            agent_id="claude",
+            todo_id="todo_222222222222",
+            turn_instance_id=args[args.index("--turn-instance-id") + 1],
+        )
+        if "should-run" in command:
+            payload = json.dumps(
+                {
+                    "ok": True,
+                    "should_run": True,
+                    "selected_todo": {
+                        "todo_id": "todo_222222222222",
+                        "source": "agent_lane_next_action",
+                    },
+                }
+            )
+        elif "complete" in command:
+            payload = json.dumps(
+                {
+                    "ok": True,
+                    "completed": True,
+                    "status": "done",
+                    "settlement_identity": identity.as_dict(),
+                    "settlement_result": {"failure": None},
+                }
+            )
+        else:
+            payload = json.dumps(
+                {
+                    "ok": True,
+                    "appended": True,
+                    "settlement_identity": identity.as_dict(),
+                    "settlement_result": {"failure": None},
+                }
+            )
+        return subprocess.CompletedProcess(command, 0, payload, "")
+
+    monkeypatch.setattr(goal_mode_mcp.subprocess, "run", capture)
+
+    output = control.complete_task(
+        "todo_222222222222", "claude", "focused check passed"
+    )
+
+    result = json.loads(output)
+    assert result["ok"] is True
+    assert result["settlement"]["ok"] is True
+    should_run, complete, refresh, spend = commands[-4:]
+    assert should_run[should_run.index("json") + 1 :] == [
+        "quota",
+        "should-run",
+        "--goal-id",
+        "shared-goal",
+        "--agent-id",
+        "claude",
+        "--todo-id",
+        "todo_222222222222",
+        "--turn-instance-id",
+        result["settlement_identity"]["turn_instance_id"],
+        "--runtime-profile",
+        "claude_code",
+    ]
+    assert complete[complete.index("--todo-id") + 1] == "todo_222222222222"
+    assert complete[complete.index("--turn-instance-id") + 1] == (
+        result["settlement_identity"]["turn_instance_id"]
+    )
+    assert refresh[refresh.index("json") + 1] == "refresh-state"
+    assert refresh[refresh.index("--goal-id") + 1] == "shared-goal"
+    assert refresh[refresh.index("--todo-id") + 1] == "todo_222222222222"
+    assert refresh[refresh.index("--turn-instance-id") + 1] == (
+        result["settlement_identity"]["turn_instance_id"]
+    )
+    assert refresh[refresh.index("--completion-todo-id") + 1] == (
+        "todo_222222222222"
+    )
+    assert refresh[refresh.index("--completion-turn-key") + 1] == (
+        result["settlement_identity"]["effect_id"]
+    )
+    assert spend[spend.index("json") + 1 : spend.index("json") + 3] == [
+        "quota",
+        "spend-slot",
+    ]
+    assert spend[spend.index("--todo-id") + 1] == "todo_222222222222"
+    assert spend[spend.index("--source") + 1] == "heartbeat"
+    assert spend[spend.index("--turn-instance-id") + 1] == (
+        result["settlement_identity"]["turn_instance_id"]
+    )
+
+
+def test_complete_task_classifies_terminal_no_selection_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control = GoalModeMCPControlPlane(
+        GoalModeMCPConfig(
+            server_name="loopx-test",
+            runtime_profile="claude_code",
+            legacy_host_surface="claude_code",
+        ),
+        lambda: {
+            "goal_id": "shared-goal",
+            "registry": "/project/.loopx/registry.json",
+            "agent_id": "claude",
+        },
+    )
+    commands: list[list[str]] = []
+    control.command_prefix = lambda: ["loopx"]
+
+    def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        payload = json.dumps(
+            {
+                "ok": True,
+                "should_run": False,
+                "effective_action": "terminal_no_followup",
+                "selected_todo": None,
+            }
+        )
+        return subprocess.CompletedProcess(command, 0, payload, "")
+
+    monkeypatch.setattr(goal_mode_mcp.subprocess, "run", capture)
+
+    output = control.complete_task(
+        "todo_222222222222", "claude", "focused check passed"
+    )
+
+    payload = json.loads(output)
+    assert payload["ok"] is False
+    assert payload["settlement"]["guard_state"] == "terminal_no_selection"
     assert len(commands) == 1
-    assert "spend-slot" not in commands[0]
+
+
+def test_complete_task_fails_closed_on_unparseable_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control = GoalModeMCPControlPlane(
+        GoalModeMCPConfig(
+            server_name="loopx-test",
+            runtime_profile="claude_code",
+            legacy_host_surface="claude_code",
+        ),
+        lambda: {
+            "goal_id": "shared-goal",
+            "registry": "/project/.loopx/registry.json",
+            "agent_id": "claude",
+        },
+    )
+    commands: list[list[str]] = []
+    control.command_prefix = lambda: ["loopx"]
+
+    def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "not-json", "")
+
+    monkeypatch.setattr(goal_mode_mcp.subprocess, "run", capture)
+
+    output = control.complete_task(
+        "todo_222222222222", "claude", "focused check passed"
+    )
+
+    payload = json.loads(output)
+    assert payload["ok"] is False
+    assert payload["settlement"]["guard_state"] == "invalid"
+    assert len(commands) == 1
 
 
 def test_installer_registers_only_the_owned_global_mcp_entry(

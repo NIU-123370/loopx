@@ -9,6 +9,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .control_plane.host_adapter_settlement import (
+    HostTodoSettlementRequest,
+    settle_host_todo_completion,
+)
+
 
 ContextResolver = Callable[[], dict[str, Any] | None]
 
@@ -193,35 +198,19 @@ class GoalModeMCPControlPlane:
             args += ["--task-lease-idempotency-key", task_lease_idempotency_key]
         if no_follow_up:
             args.append("--no-follow-up")
-        output = self.run_cli(args)
-        if self._completion_succeeded(output):
-            spend = [
-                "quota",
-                "spend-slot",
-                "--goal-id",
-                goal_id,
-                "--slots",
-                "1",
-                "--source",
-                "heartbeat",
-                "--execute",
-                "--agent-id",
-                agent_id,
-            ]
-            output += "\n--- spend-slot ---\n" + self.run_cli(spend)
-        return output
-
-    @staticmethod
-    def _completion_succeeded(output: str) -> bool:
-        try:
-            payload = json.loads(output)
-        except json.JSONDecodeError:
-            return False
-        return bool(
-            isinstance(payload, dict)
-            and payload.get("ok") is True
-            and payload.get("completed") is True
-            and payload.get("status") == "done"
+        return settle_host_todo_completion(
+            HostTodoSettlementRequest(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                todo_id=todo_id,
+                runtime_profile=self.config.runtime_profile,
+                legacy_host_surface=self.config.legacy_host_surface,
+                scheduler_owner=self.config.scheduler_owner,
+                execution_mode=self.config.execution_mode,
+                completion_args=tuple(args),
+                no_follow_up=no_follow_up,
+            ),
+            run_cli=self.run_cli,
         )
 
 

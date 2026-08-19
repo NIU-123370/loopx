@@ -299,6 +299,14 @@ def register_project_lifecycle_commands(
         ),
     )
     refresh_state_parser.add_argument(
+        "--completion-todo-id",
+        help=argparse.SUPPRESS,
+    )
+    refresh_state_parser.add_argument(
+        "--completion-turn-key",
+        help=argparse.SUPPRESS,
+    )
+    refresh_state_parser.add_argument(
         "--autonomous-replan-recorded",
         action="store_true",
         help=(
@@ -651,6 +659,8 @@ def handle_project_lifecycle_command(
                 replan_obligation_id=getattr(
                     args, "replan_obligation_id", None
                 ),
+                completion_todo_id=getattr(args, "completion_todo_id", None),
+                completion_turn_key=getattr(args, "completion_turn_key", None),
                 agent_id=args.agent_id,
                 agent_lane=args.agent_lane,
                 progress_scope=args.progress_scope,
