@@ -9,6 +9,12 @@ DEFAULT_PROJECT_REGISTRY = Path(".loopx") / "registry.json"
 GLOBAL_REGISTRY_FILENAME = "registry.global.json"
 
 
+def default_public_scan_root() -> str:
+    """Return the bounded LoopX package root used by public scans."""
+
+    return str(Path(__file__).resolve().parent)
+
+
 def default_registry_path() -> Path:
     value = os.environ.get("LOOPX_REGISTRY")
     if value:

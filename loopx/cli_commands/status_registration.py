@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
-from pathlib import Path
 
-
-def default_public_scan_root() -> str:
-    return str(Path(__file__).resolve().parents[2])
+from ..paths import default_public_scan_root
 
 
 def register_status_commands(

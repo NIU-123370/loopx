@@ -35,6 +35,7 @@ from ..control_plane.turn_driver import (
     run_loopx_turn_once,
     selected_turn_todo,
 )
+from ..paths import default_public_scan_root
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
@@ -47,12 +48,6 @@ PrintPayload = Callable[
 ]
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
-
-
-def _default_public_scan_root() -> str:
-    return str(Path(__file__).resolve().parents[2])
-
-
 def register_turn_commands(
     subparsers: argparse._SubParsersAction,
     add_subcommand_format: AddFormat,
@@ -84,7 +79,7 @@ def register_turn_commands(
     )
     plan.add_argument(
         "--scan-root",
-        default=_default_public_scan_root(),
+        default=default_public_scan_root(),
         help="Public files to scan for obvious private material.",
     )
     plan.add_argument(
@@ -187,7 +182,7 @@ def register_turn_commands(
     )
     run_once.add_argument(
         "--scan-root",
-        default=_default_public_scan_root(),
+        default=default_public_scan_root(),
         help="Public files to scan for obvious private material.",
     )
     run_once.add_argument("--scan-path", action="append", default=[])

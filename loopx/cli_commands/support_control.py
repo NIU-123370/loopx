@@ -28,6 +28,7 @@ from ..chat_server import (
 )
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from ..dashboard_launcher import launch_dashboard
+from ..paths import default_public_scan_root
 from ..presentation.renderers.status_markdown import render_status_markdown
 from ..promotion_gate import (
     build_promotion_gate,
@@ -56,7 +57,6 @@ from ..status_server import (
 )
 from ..upgrade import build_upgrade_plan, render_upgrade_plan_markdown
 from .support_control_registry import (
-    default_public_scan_root,
     explicit_global_registry,
     resolve_heartbeat_active_state,
 )

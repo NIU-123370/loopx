@@ -27,7 +27,7 @@ from ..presentation.renderers.status_markdown import render_status_markdown
 from ..quota import build_quota_should_run
 from ..review_packet import build_review_packet, render_review_packet_markdown
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
-from .status_registration import default_public_scan_root, register_status_commands
+from .status_registration import register_status_commands as register_status_commands
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],

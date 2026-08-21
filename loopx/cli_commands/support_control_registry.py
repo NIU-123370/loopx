@@ -7,10 +7,6 @@ from ..paths import DEFAULT_RUNTIME_ROOT, global_registry_path
 from ..registry import registry_goals, resolve_state_file
 
 
-def default_public_scan_root() -> str:
-    return str(Path(__file__).resolve().parents[2])
-
-
 def fallback_global_registry(registry_path: Path, runtime_root_arg: str | None) -> Path:
     if registry_path.exists():
         return registry_path

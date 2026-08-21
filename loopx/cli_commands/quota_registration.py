@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from ..control_plane.quota.spend_sources import (
     DEFAULT_SLOT_SPEND_SOURCE,
     VALID_SLOT_SPEND_SOURCES,
 )
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
+from ..paths import default_public_scan_root
 from .quota_request import (
     QUOTA_DETAIL_SECTIONS,
     register_quota_monitor_poll_request_arguments,
 )
-
-
-def _default_public_scan_root() -> str:
-    return str(Path(__file__).resolve().parents[2])
 
 
 def register_quota_command(
@@ -227,7 +223,7 @@ def register_quota_command(
     )
     quota_parser.add_argument(
         "--scan-root",
-        default=_default_public_scan_root(),
+        default=default_public_scan_root(),
         help="Public files to scan for obvious private material. Defaults to the LoopX install root.",
     )
     quota_parser.add_argument(

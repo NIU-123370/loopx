@@ -25,11 +25,10 @@ from ..control_plane.runtime.agent_scoped_evidence_log import (
     goal_history_runs,
 )
 from ..history import collect_history, load_registry
-from ..paths import resolve_runtime_root
+from ..paths import default_public_scan_root, resolve_runtime_root
 from ..rollout_event_log import load_rollout_events, rollout_event_log_path
 from ..status import collect_status
 from .support_control_registry import (
-    default_public_scan_root,
     fallback_global_registry,
     resolve_heartbeat_active_state,
 )
