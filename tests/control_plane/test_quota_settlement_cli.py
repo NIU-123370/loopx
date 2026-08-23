@@ -8,6 +8,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from loopx import cli as loopx_cli
+from loopx.control_plane.status.autonomous_replan_projection import (
+    AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+)
+from loopx.status import autonomous_replan_periodic_review_from_runs
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOAL_ID = "settlement-cli-fixture"
 AGENT_ID = "codex-settlement-cli"
@@ -153,6 +161,21 @@ def _heartbeat_receipt_count(runtime: Path, turn_instance_id: str) -> int:
         for line in log_path.read_text(encoding="utf-8").splitlines()
         if (
             (event := json.loads(line)).get("event_kind") == "quota_should_run"
+            and event.get("run_id") == turn_instance_id
+            and event.get("agent_id") == AGENT_ID
+        )
+    )
+
+
+def _refresh_receipt_count(runtime: Path, turn_instance_id: str) -> int:
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    if not log_path.exists():
+        return 0
+    return sum(
+        1
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if (
+            (event := json.loads(line)).get("event_kind") == "refresh_state"
             and event.get("run_id") == turn_instance_id
             and event.get("agent_id") == AGENT_ID
         )
@@ -1166,6 +1189,231 @@ def test_todo_bound_autonomous_replan_uses_one_binding_for_refresh_and_spend(
         receipt["step_kind"] for receipt in spend["settlement_result"]["receipts"]
     ] == ["validation", "durable_writeback", "quota_spend"]
     assert _spend_run_count(runtime) == 1
+
+
+def test_todo_bound_periodic_replan_writeback_is_receipted_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8")
+        .replace("status: active-read-only", "status: active")
+        .replace(
+            "task_class=advancement_task action_kind=validate",
+            (
+                "task_class=advancement_task action_kind=validate "
+                f"claimed_by={AGENT_ID}"
+            ),
+        ),
+        encoding="utf-8",
+    )
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["status"] = "active"
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    durable_runs = [
+        {
+            "generated_at": f"2026-08-13T00:{index:02d}:00+00:00",
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "classification": "source_audit_progress",
+            "progress_scope": "agent_lane",
+            "delivery_batch_scale": "single_surface",
+            "delivery_outcome": "surface_only",
+        }
+        for index in range(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    ]
+    (runs_dir / "index.jsonl").write_text(
+        "".join(json.dumps(run) + "\n" for run in durable_runs),
+        encoding="utf-8",
+    )
+    turn_instance_id = "turn-todo-bound-periodic-replan-1"
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+
+    assert guard_rc == 0, json.dumps(guard, indent=2)
+    assert guard["decision"] == "autonomous_replan_required", guard
+    assert guard["selected_todo"]["todo_id"] == TODO_ID
+    assert guard["autonomous_replan_obligation"]["triggers"][0]["kind"] == (
+        "periodic_review_due"
+    )
+
+    successor_id = "todo_periodic_review_successor"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_text = state_text.replace("- [ ] [P1]", "- [x] [P1]", 1).replace(
+        (
+            f"todo_id={TODO_ID} status=open task_class=advancement_task "
+            f"action_kind=validate claimed_by={AGENT_ID}"
+        ),
+        (
+            f"todo_id={TODO_ID} status=done task_class=advancement_task "
+            f"action_kind=validate claimed_by={AGENT_ID} "
+            f"successor_todo_ids={successor_id} "
+            "completed_at=2026-08-13T01%3A00%3A00%2B00%3A00"
+        ),
+    )
+    state_path.write_text(
+        state_text
+        + "\n- [ ] [P1] Continue the bounded periodic-review successor.\n"
+        + (
+            "  <!-- loopx:todo "
+            f"todo_id={successor_id} status=open "
+            "task_class=advancement_task action_kind=implement "
+            f"claimed_by={AGENT_ID} -->\n"
+        ),
+        encoding="utf-8",
+    )
+    (project / "periodic-review-evidence.md").write_text(
+        "# Periodic review evidence\n\nValidated the next bounded slice.\n",
+        encoding="utf-8",
+    )
+    _initialize_git_checkout(project)
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=LoopX Test",
+            "-c",
+            "user.email=loopx-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture: record periodic review successor",
+        ],
+        cwd=project,
+        check=True,
+    )
+
+    refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        TODO_ID,
+        "--delivery-workspace-path",
+        str(project),
+        "--autonomous-replan-recorded",
+        "--repair-delta-kind",
+        "successor_or_supersede",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--classification",
+        "validated_progress",
+        "--progress-result-class",
+        "advanced",
+        "--progress-surface-id",
+        "surface-periodic-review",
+        "--progress-evidence-id",
+        "evidence-periodic-review",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+
+    mismatched_args = list(refresh_args)
+    todo_flag_index = mismatched_args.index("--todo-id")
+    mismatched_args[todo_flag_index : todo_flag_index + 2] = [
+        "--replan-obligation-id",
+        guard["replan_action_packet"]["obligation_id"],
+    ]
+    mismatched_rc, mismatched = _run_cli(
+        registry_path,
+        runtime,
+        *mismatched_args,
+    )
+
+    assert mismatched_rc == 1, mismatched
+    assert mismatched["appended"] is False
+    assert "does not match" in mismatched["error"]
+    assert _classification_count(runtime, "validated_progress") == 0
+    assert _refresh_receipt_count(runtime, turn_instance_id) == 0
+
+    monkeypatch.setattr(
+        loopx_cli,
+        "append_cli_rollout_event",
+        lambda payload, **_kwargs: payload,
+    )
+    failed_rc = loopx_cli.main(
+        [
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime),
+            "--format",
+            "json",
+            *refresh_args,
+        ]
+    )
+    failed = json.loads(capsys.readouterr().out)
+
+    assert failed_rc == 1, failed
+    assert failed["ok"] is False
+    assert failed["appended"] is False
+    assert "matching the original settlement identity" in failed["error"]
+    assert _classification_count(runtime, "validated_progress") == 0
+    assert _refresh_receipt_count(runtime, turn_instance_id) == 0
+
+    persisted_runs = [
+        json.loads(line)
+        for line in (runs_dir / "index.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    surviving_obligation = autonomous_replan_periodic_review_from_runs(
+        list(reversed(persisted_runs)),
+        agent_todos=None,
+    )
+    assert surviving_obligation is not None
+    assert surviving_obligation["triggers"][0]["kind"] == "periodic_review_due"
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+    )
+
+    assert refresh_rc == 0, json.dumps(refresh, indent=2)
+    assert refresh["ok"] is True
+    assert refresh["appended"] is True
+    assert refresh["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in refresh["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback"]
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert replay["appended"] is False
+    assert _classification_count(runtime, "validated_progress") == 1
+    assert _refresh_receipt_count(runtime, turn_instance_id) == 1
 
 
 def test_runtime_capability_reentry_preserves_receipt_bound_todo_and_rejects_explicit_conflict(

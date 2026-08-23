@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -878,6 +879,9 @@ def refresh_state_run(
     progress_observation: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
+    settlement_receipt_precommit: (
+        Callable[[dict[str, Any], SettlementIdentity], None] | None
+    ) = None,
     dry_run: bool,
     sync_global: bool = True,
 ) -> dict[str, Any]:
@@ -1255,19 +1259,6 @@ def refresh_state_run(
             delivery_workspace["repository_source"] = (
                 "refresh_state.delivery_workspace_path"
             )
-    if (
-        active_state_next_action_update
-        and active_state_next_action_update.get("would_update")
-        and not dry_run
-    ):
-        with exclusive_file_lock(resolved_state_file):
-            current_state_text = resolved_state_file.read_text(encoding="utf-8")
-            if current_state_text != expected_write_state_text:
-                raise ValueError(
-                    "active goal state changed while refresh-state was qualifying "
-                    "its semantic writeback; retry from the current state"
-                )
-            resolved_state_file.write_text(state_text, encoding="utf-8")
     record = build_state_refresh_record(
         goal_id=safe_goal_id,
         state_file=resolved_state_file,
@@ -1347,6 +1338,26 @@ def refresh_state_run(
         dry_run=dry_run,
         autonomous_replan_recorded_requested=bool(autonomous_replan_recorded),
     )
+    if not dry_run and settlement_identity is not None:
+        if settlement_receipt_precommit is None:
+            raise ValueError(
+                "turn-scoped refresh-state requires a durable settlement receipt "
+                "before writeback"
+            )
+        settlement_receipt_precommit(payload, settlement_identity)
+    if (
+        active_state_next_action_update
+        and active_state_next_action_update.get("would_update")
+        and not dry_run
+    ):
+        with exclusive_file_lock(resolved_state_file):
+            current_state_text = resolved_state_file.read_text(encoding="utf-8")
+            if current_state_text != expected_write_state_text:
+                raise ValueError(
+                    "active goal state changed while refresh-state was qualifying "
+                    "its semantic writeback; retry from the current state"
+                )
+            resolved_state_file.write_text(state_text, encoding="utf-8")
     if dry_run:
         expected_write_scopes = ["runtime_history"]
         if active_state_next_action_update and active_state_next_action_update.get("would_update"):

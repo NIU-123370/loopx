@@ -352,6 +352,30 @@ def handle_turn_command(
                 if event_payload.get("rollout_event_log_error"):
                     raise OSError(f"failed to persist {event_kind} settlement receipt")
 
+            def precommit_refresh_receipt(
+                refresh_payload: dict[str, Any],
+                identity: SettlementIdentity,
+            ) -> None:
+                if identity.effect_id != settlement_identity.effect_id:
+                    raise ValueError(
+                        "refresh-state receipt identity does not match Turn identity"
+                    )
+                append_settlement_event(
+                    refresh_payload,
+                    event_kind="refresh_state",
+                    status="appended",
+                    details={"command": "turn run-once"},
+                )
+                if find_settlement_step_event(
+                    runtime_root,
+                    identity,
+                    event_kind="refresh_state",
+                ) is None:
+                    raise OSError(
+                        "failed to persist a refresh-state receipt matching the "
+                        "original settlement identity"
+                    )
+
             writeback_contract = (
                 envelope.get("writeback")
                 if isinstance(envelope.get("writeback"), dict)
@@ -420,6 +444,7 @@ def handle_turn_command(
                     ),
                     completion_todo_id=completion_todo_id,
                     completion_turn_key=completion_turn_key,
+                    settlement_receipt_precommit=precommit_refresh_receipt,
                     dry_run=False,
                     sync_global=not bool(args.no_global_sync),
                 )

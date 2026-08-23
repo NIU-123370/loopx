@@ -16,6 +16,8 @@ from ..control_plane.goals.goal_vision_policy import (
     GOAL_VISION_ADVANCEMENT_POLICY_CHOICES,
 )
 from ..control_plane.quota.settlement import (
+    SettlementIdentity,
+    find_settlement_step_event,
     require_settlement_writeback,
     resolve_heartbeat_settlement_identity,
     settlement_result_payload,
@@ -78,6 +80,82 @@ PROJECT_LIFECYCLE_COMMANDS = {
     "reward",
     "operator-gate",
 }
+
+
+def _append_refresh_state_receipt(
+    payload: dict[str, object],
+    *,
+    args: argparse.Namespace,
+    registry_path: Path,
+    append_cli_rollout_event: AppendCliRolloutEvent,
+    status: str,
+    settlement_identity: SettlementIdentity | None = None,
+) -> None:
+    append_cli_rollout_event(
+        payload,
+        registry_path=registry_path,
+        runtime_root_arg=args.runtime_root,
+        event_kind="refresh_state",
+        agent_id=args.agent_id,
+        todo_id=getattr(args, "todo_id", None),
+        run_id=getattr(args, "turn_instance_id", None),
+        status=status,
+        summary=(
+            "refresh-state appended compact control-plane state with "
+            f"classification={payload.get('classification')}"
+        ),
+        details={
+            "command": "refresh-state",
+            "progress_scope": payload.get("progress_scope") or "",
+            "agent_lane": payload.get("agent_lane") or "",
+            "autonomous_replan_recorded": bool(
+                payload.get("autonomous_replan_recorded")
+            ),
+            "global_sync_wrote": bool(
+                isinstance(payload.get("global_sync"), dict)
+                and payload["global_sync"].get("wrote")
+            ),
+            "settlement_effect_id": (
+                payload.get("settlement_identity", {}).get("effect_id")
+                if isinstance(payload.get("settlement_identity"), dict)
+                else None
+            ),
+            "replan_obligation_id": getattr(
+                args, "replan_obligation_id", None
+            )
+            or "",
+        },
+        idempotency_fields=(
+            [
+                "goal_id",
+                "event_kind",
+                "agent_id",
+                *(
+                    ["todo_id"]
+                    if getattr(args, "todo_id", None)
+                    else []
+                ),
+                "run_id",
+            ]
+            if getattr(args, "turn_instance_id", None)
+            else None
+        ),
+    )
+    if settlement_identity is None:
+        return
+    if payload.get("rollout_event_log_error"):
+        raise OSError("failed to persist refresh-state settlement receipt")
+    runtime_root = Path(str(payload.get("runtime_root") or "")).expanduser()
+    if find_settlement_step_event(
+        runtime_root,
+        settlement_identity,
+        event_kind="refresh_state",
+    ) is None:
+        raise OSError(
+            "failed to persist a refresh-state receipt matching the original "
+            "settlement identity"
+        )
+
 
 INLINE_VISION_FIELDS = {
     "vision_summary": "vision_summary",
@@ -623,6 +701,20 @@ def handle_project_lifecycle_command(
         agent_vision_packet: dict[str, object] | None = None
         progress_observation: dict[str, object] | None = None
         merge_agent_vision_patch = False
+
+        def precommit_settlement_receipt(
+            precommit_payload: dict[str, object],
+            settlement_identity: SettlementIdentity,
+        ) -> None:
+            _append_refresh_state_receipt(
+                precommit_payload,
+                args=args,
+                registry_path=registry_path,
+                append_cli_rollout_event=append_cli_rollout_event,
+                status="appended",
+                settlement_identity=settlement_identity,
+            )
+
         try:
             inline_agent_vision_packet = _inline_agent_vision_packet(args)
             if args.agent_vision_json and inline_agent_vision_packet:
@@ -684,6 +776,7 @@ def handle_project_lifecycle_command(
                 merge_agent_vision_patch=merge_agent_vision_patch,
                 vision_unchanged_reason=args.vision_unchanged_reason,
                 progress_observation=progress_observation,
+                settlement_receipt_precommit=precommit_settlement_receipt,
                 dry_run=bool(args.dry_run),
                 sync_global=not bool(args.no_global_sync),
             )
@@ -734,58 +827,15 @@ def handle_project_lifecycle_command(
             )
         )
         if material_refresh_ready or settlement_receipt_repair:
-            append_cli_rollout_event(
+            _append_refresh_state_receipt(
                 payload,
+                args=args,
                 registry_path=registry_path,
-                runtime_root_arg=args.runtime_root,
-                event_kind="refresh_state",
-                agent_id=args.agent_id,
-                todo_id=getattr(args, "todo_id", None),
-                run_id=getattr(args, "turn_instance_id", None),
+                append_cli_rollout_event=append_cli_rollout_event,
                 status=(
                     "receipt_repaired"
                     if settlement_receipt_repair
                     else "appended"
-                ),
-                summary=(
-                    "refresh-state appended compact control-plane state with "
-                    f"classification={payload.get('classification')}"
-                ),
-                details={
-                    "command": "refresh-state",
-                    "progress_scope": payload.get("progress_scope") or "",
-                    "agent_lane": payload.get("agent_lane") or "",
-                    "autonomous_replan_recorded": bool(
-                        payload.get("autonomous_replan_recorded")
-                    ),
-                    "global_sync_wrote": bool(
-                        isinstance(payload.get("global_sync"), dict)
-                        and payload["global_sync"].get("wrote")
-                    ),
-                    "settlement_effect_id": (
-                        payload.get("settlement_identity", {}).get("effect_id")
-                        if isinstance(payload.get("settlement_identity"), dict)
-                        else None
-                    ),
-                    "replan_obligation_id": getattr(
-                        args, "replan_obligation_id", None
-                    )
-                    or "",
-                },
-                idempotency_fields=(
-                    [
-                        "goal_id",
-                        "event_kind",
-                        "agent_id",
-                        *(
-                            ["todo_id"]
-                            if getattr(args, "todo_id", None)
-                            else []
-                        ),
-                        "run_id",
-                    ]
-                    if getattr(args, "turn_instance_id", None)
-                    else None
                 ),
             )
             if getattr(args, "turn_instance_id", None) and (
