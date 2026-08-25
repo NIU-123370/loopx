@@ -288,6 +288,8 @@ def _guided_command_pack_projection(
         "host_loop_activation": command_pack.get("host_loop_activation"),
         "safety_contract": command_pack.get("safety_contract"),
         "detail_command": detail_command,
+        "todo_delta": command_pack.get("todo_delta"),
+        "existing_runnable_todo_id": command_pack.get("existing_runnable_todo_id"),
     }
     projection["packet_summary"] = _build_packet_summary(
         projection,
@@ -660,6 +662,54 @@ def derive_goal_display_name(goal_text: str | None) -> str | None:
     return public_safe_compact_text(goal_text, limit=132)
 
 
+def existing_runnable_todo_for_agent(
+    *,
+    project: Path,
+    goal: dict[str, Any],
+    state_file: str,
+    agent_id: str | None,
+) -> dict[str, Any] | None:
+    """Return one open, unblocked agent todo claimed by agent_id, if any.
+
+    A guided existing-agent takeover should continue the agent's runnable
+    frontier instead of unconditionally authoring new todos. This inspects the
+    durable active-state todo board and returns the first open, unblocked todo
+    claimed by the resolved agent, or None when the agent has no runnable work
+    to continue (fresh goal, all todos done, or the frontier is blocked).
+    """
+    if not agent_id:
+        return None
+    state_path = Path(state_file)
+    if not state_path.is_absolute():
+        state_path = project / state_path
+    if not state_path.exists():
+        return None
+    try:
+        state_text = state_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    from .control_plane.todos.active_state_todo_parser import (
+        parse_active_state_todos,
+    )
+    from .control_plane.todos.contract import normalize_todo_claimed_by
+
+    parsed = parse_active_state_todos(state_text, goal=goal)
+    agent_todos = parsed.get("agent_todos")
+    if not isinstance(agent_todos, dict):
+        return None
+    for item in agent_todos.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("done"):
+            continue
+        if normalize_todo_claimed_by(item.get("claimed_by")) != agent_id:
+            continue
+        if item.get("blocking"):
+            continue
+        return item
+    return None
+
+
 def _goal_start_bootstrap_command(
     *,
     project: str,
@@ -832,6 +882,17 @@ def build_loopx_bootstrap_command_pack(
     thread_binding_projection = {"status": thread_binding.get("status")}
     if thread_binding.get("agent_id"):
         thread_binding_projection["agent_id"] = thread_binding["agent_id"]
+    existing_runnable_todo = existing_runnable_todo_for_agent(
+        project=Path(resolved_project),
+        goal=registry_goal,
+        state_file=str(inspection.get("state_file") or ""),
+        agent_id=str(selected_agent_id) if selected_agent_id else None,
+    )
+    todo_delta = (
+        "reuse_existing"
+        if existing_runnable_todo
+        else "add_new"
+    )
     issue_fix_commands = build_issue_fix_goal_command_templates(
         cli_bin=cli_bin,
         goal_id=resolved_goal_id,
@@ -960,6 +1021,13 @@ def build_loopx_bootstrap_command_pack(
         "read_only": True,
         "goal_text": normalized_goal_text,
         "display_name": display_name,
+        "todo_delta": todo_delta,
+        "existing_runnable_todo_id": (
+            str(existing_runnable_todo.get("todo_id"))
+            if isinstance(existing_runnable_todo, dict)
+            and existing_runnable_todo.get("todo_id")
+            else None
+        ),
         "project": resolved_project,
         "goal_id": resolved_goal_id,
         "agent_id": selected_agent_id,
@@ -1531,41 +1599,60 @@ def build_start_goal_guided_packet(
             },
             *bind_thread_steps,
             *fine_mode_steps,
-            {
-                "id": "plan_ranked_todos",
-                "kind": "model_checkpoint",
-                "prompt": commands.get("goal_start_plan_prompt"),
-                "purpose": (
-                    "produce one public-safe, small, verifiable checkpoint Todo; keep "
-                    "later options as evidence-linked planning notes"
-                    if fine_grained
-                    else "produce concise public-safe P0/P1/P2 todos before todo writeback"
-                ),
-            },
-            {
-                "id": "write_ordered_todos",
-                "kind": "operator_or_agent_actions",
-                "command_template": (
-                    f"{shell_arg(cli_bin)} todo add --goal-id "
-                    f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
-                    "--project . "
-                    "--role agent "
-                    + (
-                        f"--claimed-by {shell_arg(str(command_pack.get('agent_id') or ''))} "
-                        if command_pack.get("agent_id")
-                        else "--claimed-by <agent-id> "
-                    )
-                    + "--task-class advancement_task --action-kind <action_kind> "
-                    "[--target-key <target_key>] --text '<[P0/P1/P2] ...>'"
-                ),
-                "purpose": (
-                    "write only the current checkpoint Todo; the existing replan path "
-                    "qualifies any successor after completion evidence"
-                    if fine_grained
-                    else "write todos in planner order; capability successors preserve "
-                    "the admitted action_kind and target_key for later quota re-entry"
-                ),
-            },
+            *(
+                [
+                    {
+                        "id": "continue_existing_frontier",
+                        "kind": "conditional_mutation",
+                        "todo_delta": str(command_pack.get("todo_delta") or "add_new"),
+                        "decision": "reuse_existing",
+                        "existing_todo_id": command_pack.get("existing_runnable_todo_id"),
+                        "purpose": (
+                            "the resolved agent already owns an open, unblocked "
+                            "advancement todo; continue that frontier instead of "
+                            "authoring a duplicate todo"
+                        ),
+                    }
+                ]
+                if str(command_pack.get("todo_delta") or "add_new") == "reuse_existing"
+                else [
+                    {
+                        "id": "plan_ranked_todos",
+                        "kind": "model_checkpoint",
+                        "prompt": commands.get("goal_start_plan_prompt"),
+                        "purpose": (
+                            "produce one public-safe, small, verifiable checkpoint Todo; keep "
+                            "later options as evidence-linked planning notes"
+                            if fine_grained
+                            else "produce concise public-safe P0/P1/P2 todos before todo writeback"
+                        ),
+                    },
+                    {
+                        "id": "write_ordered_todos",
+                        "kind": "operator_or_agent_actions",
+                        "command_template": (
+                            f"{shell_arg(cli_bin)} todo add --goal-id "
+                            f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
+                            "--project . "
+                            "--role agent "
+                            + (
+                                f"--claimed-by {shell_arg(str(command_pack.get('agent_id') or ''))} "
+                                if command_pack.get("agent_id")
+                                else "--claimed-by <agent-id> "
+                            )
+                            + "--task-class advancement_task --action-kind <action_kind> "
+                            "[--target-key <target_key>] --text '<[P0/P1/P2] ...>'"
+                        ),
+                        "purpose": (
+                            "write only the current checkpoint Todo; the existing replan path "
+                            "qualifies any successor after completion evidence"
+                            if fine_grained
+                            else "write todos in planner order; capability successors preserve "
+                            "the admitted action_kind and target_key for later quota re-entry"
+                        ),
+                    },
+                ]
+            ),
             {
                 "id": "refresh_state",
                 "kind": "state_sync",

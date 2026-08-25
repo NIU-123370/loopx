@@ -797,6 +797,93 @@ def test_start_goal_guided_derives_display_name_from_goal_text() -> None:
         assert rejected["command_pack"].get("display_name") is None
 
 
+def test_start_goal_guided_reuses_existing_agent_runnable_frontier() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "reuse-frontier-project"
+        project.mkdir()
+        state_file = project / ".codex" / "goals" / "reuse-goal" / "ACTIVE_GOAL_STATE.md"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(
+            "# Active Goal State\n\n## Agent Todo\n\n"
+            "- [ ] Repair the scheduler state path coverage regression\n"
+            "  <!-- loopx:todo todo_id=todo_existing_frontier role=agent status=open "
+            "priority=P1 task_class=advancement_task claimed_by=existing-agent "
+            "action_kind=repair target_key=scheduler-state-path -->\n",
+            encoding="utf-8",
+        )
+        registry = project / ".loopx" / "registry.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": "0.1",
+                    "goals": [
+                        {
+                            "id": "reuse-goal",
+                            "status": "active",
+                            "repo": str(project),
+                            "state_file": str(state_file.relative_to(project)),
+                            "coordination": {
+                                "agent_model": "peer_v1",
+                                "registered_agents": ["existing-agent"],
+                            },
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        reused = run_json(
+            "start-goal",
+            "--guided",
+            "--project",
+            str(project),
+            "--goal-id",
+            "reuse-goal",
+            "--agent-id",
+            "existing-agent",
+            "--host-surface",
+            "codex-app-ssh",
+            "--goal-text",
+            "take over the existing agent and continue its current work",
+        )
+        assert reused["command_pack"].get("todo_delta") == "reuse_existing"
+        assert reused["command_pack"].get("existing_runnable_todo_id") == "todo_existing_frontier"
+        reused_step_ids = [step["id"] for step in reused["guided_transaction"]["ordered_steps"]]
+        assert "plan_ranked_todos" not in reused_step_ids, reused_step_ids
+        assert "write_ordered_todos" not in reused_step_ids, reused_step_ids
+        assert "continue_existing_frontier" in reused_step_ids, reused_step_ids
+        frontier_step = next(
+            step
+            for step in reused["guided_transaction"]["ordered_steps"]
+            if step["id"] == "continue_existing_frontier"
+        )
+        assert frontier_step.get("decision") == "reuse_existing"
+
+        fresh = run_json(
+            "start-goal",
+            "--guided",
+            "--project",
+            str(project),
+            "--goal-id",
+            "reuse-goal",
+            "--agent-id",
+            "fresh-agent",
+            "--host-surface",
+            "codex-app-ssh",
+            "--goal-text",
+            "start a new auto research lane",
+        )
+        assert fresh["command_pack"].get("todo_delta") == "add_new"
+        fresh_step_ids = [step["id"] for step in fresh["guided_transaction"]["ordered_steps"]]
+        assert "plan_ranked_todos" in fresh_step_ids, fresh_step_ids
+        assert "write_ordered_todos" in fresh_step_ids, fresh_step_ids
+        assert "continue_existing_frontier" not in fresh_step_ids, fresh_step_ids
+
+
 def main() -> int:
     test_missing_project_stops_before_mutation()
     test_goal_text_invocation_plans_ranked_todos_before_activation()
@@ -806,6 +893,7 @@ def main() -> int:
     test_linked_git_worktree_reuses_canonical_source_registry()
     test_skill_slash_fallback_contract()
     test_start_goal_guided_derives_display_name_from_goal_text()
+    test_start_goal_guided_reuses_existing_agent_runnable_frontier()
     print("bootstrap command pack smoke passed")
     return 0
 
