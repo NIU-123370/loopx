@@ -29,6 +29,13 @@ def register_bootstrap_connect_command(subparsers: argparse._SubParsersAction) -
         help="Create a new forked goal id instead of reusing an existing global goal route.",
     )
     bootstrap_parser.add_argument("--objective", default=DEFAULT_OBJECTIVE, help="Initial goal objective.")
+    bootstrap_parser.add_argument(
+        "--display-name",
+        help=(
+            "Public display title for the goal. When omitted, no title is written "
+            "and the dashboard projection falls back to the project name."
+        ),
+    )
     bootstrap_parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="Goal domain label.")
     bootstrap_parser.add_argument("--role", choices=["controller", "subagent"], default="controller")
     bootstrap_parser.add_argument("--parent-goal-id", help="Parent goal id when --role subagent.")
@@ -195,6 +202,7 @@ def handle_bootstrap_connect_command(
             runtime_root=runtime_root,
             goal_id=goal_id,
             objective=args.objective,
+            display_name=args.display_name,
             domain=args.domain,
             role=args.role,
             parent_goal_id=args.parent_goal_id,

@@ -206,6 +206,7 @@ def _start_goal_command(
     capability_route: str | None,
     fine_grained: bool,
     include_command_pack_detail: bool,
+    display_name: str | None = None,
 ) -> str:
     return (
         f"{shell_arg(cli_bin)} --format json start-goal --guided "
@@ -223,6 +224,11 @@ def _start_goal_command(
             else ""
         )
         + f" --goal-text {shell_arg(goal_text)}"
+        + (
+            f" --display-name {shell_arg(display_name)}"
+            if display_name
+            else ""
+        )
         + (" --include-command-pack-detail" if include_command_pack_detail else "")
     )
 
@@ -240,6 +246,7 @@ def _start_goal_detail_command(
     available_capabilities: list[str] | None,
     capability_route: str | None,
     fine_grained: bool,
+    display_name: str | None = None,
 ) -> str:
     return _start_goal_command(
         project=project,
@@ -254,6 +261,7 @@ def _start_goal_detail_command(
         capability_route=capability_route,
         fine_grained=fine_grained,
         include_command_pack_detail=True,
+        display_name=display_name,
     )
 
 
@@ -310,6 +318,7 @@ def build_start_goal_host_surface_selection_packet(
     capability_route: str | None = None,
     fine_grained: bool = False,
     include_command_pack_detail: bool = False,
+    display_name: str | None = None,
 ) -> dict[str, Any]:
     """Fail closed when the caller has not identified the current Codex host."""
 
@@ -352,6 +361,11 @@ def build_start_goal_host_surface_selection_packet(
                 else ""
             )
             + f" --goal-text {shell_arg(normalized_goal_text)}"
+            + (
+                f" --display-name {shell_arg(display_name)}"
+                if display_name
+                else ""
+            )
             + (" --include-command-pack-detail" if include_command_pack_detail else "")
         )
         choices.append(
@@ -380,6 +394,7 @@ def build_start_goal_host_surface_selection_packet(
         "writes_now": False,
         "spends_quota_now": False,
         "goal_text": normalized_goal_text,
+        "display_name": display_name,
         "blocked_by": "host_surface_selection",
         "host_surface_selection_gate": gate,
         "ordered_steps": [
@@ -409,6 +424,7 @@ def build_start_goal_host_surface_selection_packet(
         "new_peer": new_peer,
         "host_surface": None,
         "goal_text": normalized_goal_text,
+        "display_name": display_name,
         "host_surface_selection_gate": gate,
         "recommended_next_step": {
             "kind": "select_host_surface",
@@ -630,6 +646,20 @@ def _project_command(project: str, command: str) -> str:
     return "\n".join([f"cd {shell_arg(project)}", command])
 
 
+def derive_goal_display_name(goal_text: str | None) -> str | None:
+    """Derive a public-safe display title from goal text.
+
+    The project name is only a fallback when no title can be derived. Goal text
+    is user-supplied task prose, so it is run through the public-safe compact
+    text boundary: whitespace is collapsed, the result is truncated, and any
+    local-path or credential-like surface makes the title unrevealable
+    (returns None) instead of leaking private material into a public goal title.
+    """
+    from .control_plane.runtime.public_safety import public_safe_compact_text
+
+    return public_safe_compact_text(goal_text, limit=132)
+
+
 def _goal_start_bootstrap_command(
     *,
     project: str,
@@ -637,6 +667,7 @@ def _goal_start_bootstrap_command(
     goal_text: str | None,
     cli_bin: str,
     fine_grained: bool,
+    display_name: str | None = None,
 ) -> str:
     objective = goal_text or "<exact /loopx goal text>"
     lines = [
@@ -650,6 +681,8 @@ def _goal_start_bootstrap_command(
         "  --no-onboarding-scan \\",
         "  --codex-app-heartbeat ask",
     ]
+    if display_name:
+        lines.insert(-1, f"  --display-name {shell_arg(display_name)} \\")
     if fine_grained:
         lines[-1] += " \\"
         lines.append("  --fine-grained")
@@ -719,6 +752,7 @@ def build_loopx_bootstrap_command_pack(
     capability_route: str | None = None,
     fine_grained: bool = False,
     resolve_linked_worktree_alias: bool = True,
+    display_name: str | None = None,
 ) -> dict[str, Any]:
     inspection = inspect_bootstrap_connection(
         project,
@@ -836,6 +870,7 @@ def build_loopx_bootstrap_command_pack(
         goal_text=normalized_goal_text,
         cli_bin=cli_bin,
         fine_grained=fine_grained,
+        display_name=display_name,
     )
     goal_start_plan_prompt = build_goal_start_prompt(
         goal_text=normalized_goal_text,
@@ -916,9 +951,15 @@ def build_loopx_bootstrap_command_pack(
                 if normalized_goal_text
                 else ""
             )
+            + (
+                f" --display-name {shell_arg(display_name)}"
+                if display_name
+                else ""
+            )
         ),
         "read_only": True,
         "goal_text": normalized_goal_text,
+        "display_name": display_name,
         "project": resolved_project,
         "goal_id": resolved_goal_id,
         "agent_id": selected_agent_id,
@@ -1054,6 +1095,7 @@ def _build_multi_goal_start_selection_packet(
     capability_route: str | None,
     fine_grained: bool,
     include_command_pack_detail: bool,
+    display_name: str | None = None,
 ) -> dict[str, Any] | None:
     inspection = inspect_bootstrap_connection(
         project,
@@ -1254,6 +1296,7 @@ def _build_multi_goal_start_selection_packet(
         available_capabilities=available_capabilities,
         capability_route=capability_route,
         fine_grained=fine_grained,
+        display_name=display_name,
     )
     selected_command_pack = (
         command_pack
@@ -1322,6 +1365,7 @@ def build_start_goal_guided_packet(
     capability_route: str | None = None,
     fine_grained: bool = False,
     include_command_pack_detail: bool = False,
+    display_name: str | None = None,
 ) -> dict[str, Any]:
     if goal_id is None:
         selection_packet = _build_multi_goal_start_selection_packet(
@@ -1336,6 +1380,7 @@ def build_start_goal_guided_packet(
             capability_route=capability_route,
             fine_grained=fine_grained,
             include_command_pack_detail=include_command_pack_detail,
+            display_name=display_name,
         )
         if selection_packet is not None:
             return selection_packet
@@ -1352,6 +1397,7 @@ def build_start_goal_guided_packet(
         capability_route=capability_route,
         fine_grained=fine_grained,
         resolve_linked_worktree_alias=False,
+        display_name=display_name,
     )
     commands = command_pack.get("commands")
     commands = commands if isinstance(commands, dict) else {}
@@ -1373,6 +1419,7 @@ def build_start_goal_guided_packet(
                 capability_route=capability_route,
                 fine_grained=fine_grained,
                 include_command_pack_detail=False,
+                display_name=str(command_pack.get("display_name") or display_name or ""),
             )
 
         fresh_registration = identity_selection_gate.get("fresh_agent_registration")
@@ -1638,6 +1685,7 @@ def build_start_goal_guided_packet(
         available_capabilities=available_capabilities,
         capability_route=capability_route,
         fine_grained=fine_grained,
+        display_name=str(command_pack.get("display_name") or display_name or ""),
     )
     selected_command_pack = (
         command_pack

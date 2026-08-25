@@ -10,6 +10,7 @@ from ..bootstrap_command_pack import (
     START_GOAL_HOST_SURFACES,
     build_start_goal_guided_packet,
     build_start_goal_host_surface_selection_packet,
+    derive_goal_display_name,
     render_start_goal_guided_markdown,
 )
 from ._host_thread import current_host_thread_id
@@ -51,6 +52,13 @@ def register_start_goal_command(subparsers: argparse._SubParsersAction) -> None:
     )
     start_goal_parser.add_argument("--project", default=".", help="Project directory to inspect.")
     start_goal_parser.add_argument("--goal-id", help="Goal id. Defaults to <project-name>-goal.")
+    start_goal_parser.add_argument(
+        "--display-name",
+        help=(
+            "Public display title for the goal. When omitted, a public-safe title "
+            "is derived from the goal text; the project name only remains as a fallback."
+        ),
+    )
     start_goal_parser.add_argument(
         "--agent-id",
         help=(
@@ -217,6 +225,7 @@ def handle_start_goal_command(
         }
         print_payload(payload, args.format, render_start_goal_guided_markdown)
         return 2
+    display_name = args.display_name or derive_goal_display_name(goal_text)
     if not args.host_surface:
         payload = build_start_goal_host_surface_selection_packet(
             project=Path(args.project),
@@ -230,6 +239,7 @@ def handle_start_goal_command(
             capability_route=capability_route,
             fine_grained=fine_grained,
             include_command_pack_detail=bool(args.include_command_pack_detail),
+            display_name=display_name,
         )
         print_payload(payload, args.format, render_start_goal_guided_markdown)
         return 0
@@ -246,6 +256,7 @@ def handle_start_goal_command(
         capability_route=capability_route,
         fine_grained=fine_grained,
         include_command_pack_detail=bool(args.include_command_pack_detail),
+        display_name=display_name,
     )
     print_payload(payload, args.format, render_start_goal_guided_markdown)
     return 0
