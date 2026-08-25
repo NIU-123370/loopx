@@ -8,6 +8,7 @@ from ..bootstrap import (
     DEFAULT_DOMAIN,
     DEFAULT_OBJECTIVE,
     bootstrap_project,
+    derive_goal_display_name,
     render_bootstrap_markdown,
 )
 PrintPayload = Callable[
@@ -32,8 +33,8 @@ def register_bootstrap_connect_command(subparsers: argparse._SubParsersAction) -
     bootstrap_parser.add_argument(
         "--display-name",
         help=(
-            "Public display title for the goal. When omitted, no title is written "
-            "and the dashboard projection falls back to the project name."
+            "Public display title for the goal. When omitted, a public-safe title is "
+            "derived from the objective; the project name remains the fallback."
         ),
     )
     bootstrap_parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="Goal domain label.")
@@ -202,7 +203,7 @@ def handle_bootstrap_connect_command(
             runtime_root=runtime_root,
             goal_id=goal_id,
             objective=args.objective,
-            display_name=args.display_name,
+            display_name=args.display_name or derive_goal_display_name(args.objective),
             domain=args.domain,
             role=args.role,
             parent_goal_id=args.parent_goal_id,

@@ -10,7 +10,6 @@ from ..bootstrap_command_pack import (
     START_GOAL_HOST_SURFACES,
     build_start_goal_guided_packet,
     build_start_goal_host_surface_selection_packet,
-    derive_goal_display_name,
     render_start_goal_guided_markdown,
 )
 from ._host_thread import current_host_thread_id
@@ -225,7 +224,7 @@ def handle_start_goal_command(
         }
         print_payload(payload, args.format, render_start_goal_guided_markdown)
         return 2
-    display_name = args.display_name or derive_goal_display_name(goal_text)
+    display_name = args.display_name
     if not args.host_surface:
         payload = build_start_goal_host_surface_selection_packet(
             project=Path(args.project),

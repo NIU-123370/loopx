@@ -746,11 +746,27 @@ def test_start_goal_guided_derives_display_name_from_goal_text() -> None:
         connect_command = str(
             derived["command_pack"]["commands"]["goal_start_connect_if_needed"]
         )
-        assert "--display-name '修复 scheduler state path 覆盖问题'" in connect_command, connect_command
-        assert (
-            derived["command_pack"].get("display_name")
-            == "修复 scheduler state path 覆盖问题"
+        assert "--display-name" not in connect_command, connect_command
+        assert derived["command_pack"].get("display_name") is None
+
+        run_json(
+            "bootstrap",
+            "--project",
+            str(project),
+            "--goal-id",
+            "derived-display-goal",
+            "--objective",
+            "修复 scheduler state path 覆盖问题",
+            "--no-onboarding-scan",
+            "--no-global-sync",
         )
+        registry = json.loads(
+            (project / ".loopx" / "registry.json").read_text(encoding="utf-8")
+        )
+        registry_goal = next(
+            goal for goal in registry["goals"] if goal["id"] == "derived-display-goal"
+        )
+        assert registry_goal.get("display_name") == "修复 scheduler state path 覆盖问题"
 
         explicit = run_json(
             "start-goal",

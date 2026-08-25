@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .control_plane.runtime.time import now_local_iso
+from .control_plane.runtime.public_safety import public_safe_compact_text
 from .control_plane.todos.active_state_editing import (
     TODO_SECTION_HEADINGS,
     insertion_anchor,
@@ -74,6 +75,12 @@ def slugify_goal_id(value: str) -> str:
 
 def default_goal_id(project: Path) -> str:
     return f"{slugify_goal_id(project.name)}-goal"
+
+
+def derive_goal_display_name(goal_text: str | None) -> str | None:
+    """Derive a public-safe display title from user-supplied goal text."""
+
+    return public_safe_compact_text(goal_text, limit=132)
 
 
 def now_iso() -> str:

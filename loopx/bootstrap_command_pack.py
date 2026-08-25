@@ -648,20 +648,6 @@ def _project_command(project: str, command: str) -> str:
     return "\n".join([f"cd {shell_arg(project)}", command])
 
 
-def derive_goal_display_name(goal_text: str | None) -> str | None:
-    """Derive a public-safe display title from goal text.
-
-    The project name is only a fallback when no title can be derived. Goal text
-    is user-supplied task prose, so it is run through the public-safe compact
-    text boundary: whitespace is collapsed, the result is truncated, and any
-    local-path or credential-like surface makes the title unrevealable
-    (returns None) instead of leaking private material into a public goal title.
-    """
-    from .control_plane.runtime.public_safety import public_safe_compact_text
-
-    return public_safe_compact_text(goal_text, limit=132)
-
-
 def existing_runnable_todo_for_agent(
     *,
     project: Path,
