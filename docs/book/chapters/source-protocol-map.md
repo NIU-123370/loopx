@@ -250,6 +250,14 @@ proof。
 | `handoff` | 跨 runtime handoff、review packet 与 owner route |
 | `work_items` | attention、selection 与 operator-facing work read model |
 
+在 `v0.5.2` 的迁移基线上，bounded context 和实现语言是两个维度。部分
+`goals`、`todos`、`quota`、`scheduler`、`work_items` 与 `turn_driver` 规则已经由同目录下的
+TypeScript module 拥有语义，Python facade/module 可能只是 CLI transport、legacy projection
+或外部 Provider adapter。定位 owner 时应先读
+[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
+的 shipped baseline，再沿真实 request handler 和 caller 判断；不要因为入口仍是 Python，就默认
+Python 仍拥有该 decision。
+
 选择位置时问：
 
 ```text
@@ -286,6 +294,11 @@ proof。
 | Host/Runner 集成 | runtime connector、Turn/Host contracts 与对应 adapter |
 | 操作投影 | status/frontstage/projection owner；renderer 只消费 typed read model |
 | 文档与验证 | owning protocol 文档、`tests/`、`examples/` 或 public-safe fixture |
+
+当前 capability 目录采用 package-owned documentation 与 `catalog_entry.py` 注册。贡献前运行
+`loopx capability list --format json` 和 `loopx capability show <capability-id> --format json`，
+确认 capability 是否真实注册、有哪些 entry command、Provider 边界与 durable validation。仅有
+目录或 README 不证明能力已经发布。
 
 `loopx/capabilities/<name>/` 中有代码不自动证明它是公开 Capability；需要显式注册和真实 caller
 contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：只有独立 provider lifecycle 才属于

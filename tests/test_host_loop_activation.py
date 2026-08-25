@@ -235,8 +235,11 @@ def test_pi_is_an_exact_host_type_with_visible_goal_extension_activation() -> No
     assert packet["setup_command"] == "loopx slash-commands --install --surface pi"
     assert packet["host_mutation"]["owner"] == "Pi LoopX goal extension"
     assert packet["host_mutation"]["host_tool"] == "loopx_goal_activate"
+    assert packet["host_mutation"]["tool_argument_mapping"]["activationToken"] == (
+        "pi_session_authority.token from the host startup/session packet"
+    )
     assert packet["host_mutation"]["tool_argument_mapping"]["goalId"] == (
-        "heartbeat_prompt.goal_id"
+        "optional compatibility echo; host authority derives the value"
     )
     assert packet["host_mutation"]["tool_argument_mapping"]["objective"] == (
         "heartbeat_prompt.task_body"

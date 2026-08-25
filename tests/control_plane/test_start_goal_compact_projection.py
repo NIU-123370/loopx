@@ -1316,6 +1316,7 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
         "gemini-cli",
         "cursor-agent",
         "zcode",
+        "agy",
         "deepseek-harness",
         "deepseek-harness-native",
         "ark-managed-agent",

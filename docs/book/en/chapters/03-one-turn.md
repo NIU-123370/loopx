@@ -353,9 +353,33 @@ does not directly trust a Host completion claim.
 
 !!! info "Current maturity"
     TurnEnvelope is currently an explicitly enabled bounded projection, not the default quota output.
-    LoopX Turn is an experimental protocol and implementation target. They are suitable for contributors
-    to understand boundaries and build integration experiments, but should not be described as a stable
-    runtime already uniformly adopted by every Host.
+    LoopX Turn remains an experimental protocol, but `v0.5.2` ships executable `turn plan` /
+    `turn run-once` paths and Host adapters. They are suitable for understanding boundaries and building
+    explicit opt-in integrations, but should not be described as a recurring runtime enabled by default
+    across every Host.
+
+### Where the TypeScript Effect Program sits in one turn
+
+`v0.5.2` moves the canonical semantics for the Effect Program and several high-risk transactions into
+TypeScript:
+
+```text
+Python CLI / Host adapter
+  -> typed request
+  -> managed TypeScript Effect runtime
+  -> domain-owned decision or effect receipt
+  -> Python compatibility projection / explicit external Provider
+```
+
+Turn settlement, Todo completion, quota delivery routing, workspace causality, and scheduler state now
+have TypeScript owners. Python remains important as the current CLI, the adapter for explicit external
+Providers, and part of durable writeback. Do not read the migration as “Python has been removed,” and do
+not reimplement the same rule inside a Python facade.
+
+The current
+[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
+defines later work as a transaction-payoff phase: migrate a complete transaction and delete the replaced
+Python semantic path. Adding only a leaf handler, DTO, or bridge call is not migration progress.
 
 ## Monitor and Scheduler Hint
 

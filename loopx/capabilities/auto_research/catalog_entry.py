@@ -56,6 +56,11 @@ AUTO_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
             "write_boundary": "read-only projection over rollout and Explore result events",
         },
         {
+            "command": "loopx auto-research artifact-receipt --contract <delivery-contract.json>",
+            "purpose": "Fold one versioned research wish contract, current evidence, terminal decisions, and independent reviews into a read-only delivery receipt.",
+            "write_boundary": "read-only projection; does not infer user acceptance, promote skills, or write project state",
+        },
+        {
             "command": "loopx auto-research project-results --goal-id <goal-id> --execute",
             "purpose": "Project current terminal outcomes into deterministic existing Explore node and finding events.",
             "write_boundary": "goal-scoped Explore result log only; repeated projection is idempotent",
@@ -92,12 +97,23 @@ AUTO_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
             "module": "loopx.capabilities.auto_research.terminal_results",
             "doc": "docs/reference/protocols/decentralized-auto-research-state-v0.md",
         },
+        {
+            "schema_version": "auto_research_delivery_contract_v0",
+            "module": "loopx.capabilities.auto_research.delivery_contract",
+            "doc": "docs/reference/protocols/auto-research-wish-to-artifact-v0.md",
+        },
+        {
+            "schema_version": "auto_research_artifact_receipt_v0",
+            "module": "loopx.capabilities.auto_research.artifact_receipt",
+            "doc": "docs/reference/protocols/auto-research-wish-to-artifact-v0.md",
+        },
     ],
     "smokes": [
         "python3 examples/auto-research-user-contract-entry-smoke.py",
         "python3 examples/auto-research-worker-turn-smoke.py",
         "python3 examples/auto-research-terminal-results-smoke.py",
         "python3 examples/auto-research-terminal-results-cli-smoke.py",
+        "python3 examples/auto-research-artifact-receipt-smoke.py",
     ],
     "docs": [
         "loopx/capabilities/auto_research/README.md",
@@ -108,6 +124,8 @@ AUTO_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
         "Completion and uplift require role-authored evidence and projected outcomes; the launcher does not manufacture research results.",
         "Promotion and retirement candidates are not terminal decisions; explicit decisions bind one hypothesis evidence revision.",
         "Same-agent review remains visible but cannot be labeled independent or upgrade a finding to confirmed or refuted.",
+        "A delivery receipt aggregates existing evidence and never treats one failed attempt as proof that a wish cannot be fulfilled.",
+        "A not-fulfilled receipt requires a terminal retirement decision plus any independent review required by the delivery contract.",
     ],
     "next_real_step": (
         "Use the one-question entrypoint for bounded research and preserve every promoted or rejected outcome in canonical evidence."

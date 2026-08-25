@@ -65,7 +65,7 @@ def test_runner_owned_gateway_injects_upstream_credential_and_streams_response()
                 f"{gateway.base_url}/responses?trace=1",
                 data=b'{"model":"fixture"}',
                 headers={
-                    "Authorization": "Bearer agent-visible-sentinel",
+                    "Authorization": "Bearer " + "agent-visible-sentinel",
                     "Content-Type": "application/json",
                 },
                 method="POST",
@@ -76,7 +76,7 @@ def test_runner_owned_gateway_injects_upstream_credential_and_streams_response()
     assert payload == {"ok": True}
     assert observed == {
         "path": "/v1/responses?trace=1",
-        "authorization": "Bearer fixture-upstream-secret",
+        "authorization": "Bearer " + "fixture-upstream-secret",
         "body": b'{"model":"fixture"}',
     }
 

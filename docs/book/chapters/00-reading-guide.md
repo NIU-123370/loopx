@@ -89,6 +89,7 @@ lifecycle 选择，不是所有贡献的默认终点。
 ## 权威来源
 
 本书拥有教学顺序和解释，不拥有 LoopX 的版本化行为：
+中文与英文版本是语义镜像；版本事实、状态、命令、边界或结论出现实质差异都属于文档缺陷。
 
 | 内容 | 权威来源 |
 | --- | --- |
@@ -102,14 +103,17 @@ lifecycle 选择，不是所有贡献的默认终点。
 
 ## 版本基线
 
-当前内容以 LoopX GitHub release `v0.4.4` 为发布锚点；本地命令示例已在 `loopx 0.4.4` CLI
-表面核对。发布标签、已安装 CLI 与源码 checkout 可能处于不同 revision，因此以下表面尤其需要
-按实际环境复核：
+当前内容以 LoopX GitHub release `v0.5.2` 为发布锚点；本地命令示例已按 `loopx 0.5.2` 的
+公开 CLI 与协议表面复核。该版本要求 Python 3.11+ 与 Node.js 22.6+；后者运行由 LoopX 自动管理、
+空闲后退出的 TypeScript Effect runtime，用户不需要手工维护 daemon。
+
+发布标签、已安装 CLI 与源码 checkout 可能处于不同 revision，因此以下表面尤其需要按实际环境复核：
 
 - 安装与升级；
 - Host 启动方式；
 - `start-goal` guided packet；
-- Codex App heartbeat 与 Codex CLI visible Goal；
+- Codex App heartbeat、Codex CLI visible Goal 和其他可选 Host；
+- TypeScript Effect runtime readiness；
 - Extension manifest 与生命周期命令。
 
 运行书中命令前先执行：
@@ -117,10 +121,42 @@ lifecycle 选择，不是所有贡献的默认终点。
 ```bash
 loopx --version
 loopx doctor
+node --version
 ```
 
 如果版本不同，先查看当前命令帮助和官方 release notes，再判断差异是文档漂移、发布差异还是
 产品行为变化。本书不猜测不同版本标识之间的发布含义。
+
+### 如何理解当前 TypeScript 改造
+
+`v0.5.2` 不是“已经把 LoopX 全部重写成 TypeScript”。当前发布基线是：
+
+- TypeScript 已拥有 Effect Program、Turn settlement、Todo completion、quota delivery routing、
+  workspace causality、scheduler transition/state 等迁移切片的 canonical semantics；
+- Python CLI 仍负责迁移期 transport、legacy response projection、明确的外部 Provider 调用和部分
+  Markdown/event 写回；
+- 同一条迁移后的规则只能有一个 semantic owner。Python facade 适配 TypeScript transaction，
+  不能再实现第二套独立 decision；
+- 当前 `main` 已进入 transaction-payoff phase：后续以完整 transaction cutover 和删除旧语义
+  为进展单位，不继续堆 leaf helper 与 bridge。
+
+发布态以 `v0.5.2` tag 和 release notes 为准；迁移阶段、下一批 cutover 与最终 CLI/App 收敛以
+[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
+的当前状态为准。RFC 中的 Stage 3/4 仍是后续方向，不应写成已经发布。
+
+### 从 `v0.4.4` 阅读基线升级到 `v0.5.2`
+
+如果你读过旧版 Dev Book，优先校准四个变化：
+
+| 主题 | `v0.5.2` 已发布事实 | 深入入口 |
+| --- | --- | --- |
+| Control Plane | 多个高风险 decision/effect 已迁入 typed TypeScript transaction owner；Python facade 仍承担迁移期边界 | [迁移 RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
+| Operator surface | Personal Workspace 已提供 Goal、Task、Chat 和 read-only status source 入口；界面不是新的事实源 | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.2/apps/presentation/dashboard/README.md) |
+| Host runtime | Codex、Claude Code、OpenCode、Pi、KunlunCode、DeepSeek Harness 与 custom runner 具有不同 activation/stop contract | [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/) |
+| Capability / Provider | Capability 由 package-owned catalog entry、真实 command 和 durable validation 共同定义；Provider/Extension 不继承 Kernel authority | [Capability Catalog](/loopx/docs/capabilities/) |
+
+这张表是阅读导航，不是 release notes 的副本。某个 surface 是否可用，仍应从当前安装版本的
+`doctor`、`capability show`、对应 Host readback 和 versioned 文档判断。
 
 ## 本书的边界
 

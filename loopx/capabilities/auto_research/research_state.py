@@ -13,13 +13,18 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .delivery_contract import (
+    AutoResearchContractLineageError,
+    auto_research_contract_lineage_dict,
+    auto_research_contract_lineage_matches,
+    normalize_auto_research_contract_lineage,
+)
 from .evidence_packet import (
     METRIC_DIRECTIONS,
     RESEARCH_FAILURE_KINDS,
     RESEARCH_EVIDENCE_EVENT_SCHEMA_VERSION,
     RESEARCH_HYPOTHESIS_SCHEMA_VERSION,
     _compact_public_text,
-    _compact_public_text_list,
     _compact_public_token,
     _derive_hypothesis_status,
     _finite_float,
@@ -290,6 +295,27 @@ def _rollout_hypothesis_text(event: dict[str, Any], details: dict[str, Any]) -> 
     return _compact_public_text(fallback, field="rollout.summary.hypothesis")
 
 
+def _rollout_contract_lineage(details: dict[str, Any]) -> dict[str, Any]:
+    lineage = normalize_auto_research_contract_lineage(
+        details,
+        field="rollout.details",
+    )
+    return auto_research_contract_lineage_dict(lineage) if lineage else {}
+
+
+def _hypothesis_blocked_by(
+    *,
+    status: object,
+    negative_count: int,
+    retry_count: int,
+) -> list[str]:
+    if str(status) == "contradicted" or negative_count:
+        return ["evidence_or_boundary_guardrail_failed"]
+    if str(status) == "needs_retry" or retry_count:
+        return ["needs_retry_evidence"]
+    return []
+
+
 def _research_hypothesis_from_rollout_event(event: dict[str, Any]) -> dict[str, Any] | None:
     if str(event.get("event_kind") or "") != "research_hypothesis":
         return None
@@ -300,11 +326,6 @@ def _research_hypothesis_from_rollout_event(event: dict[str, Any]) -> dict[str, 
     negative_count = int(details.get("negative_evidence_count") or 0)
     retry_count = int(details.get("needs_retry_count") or 0)
     status = details.get("status") or event.get("status") or "active"
-    blocked_by: list[str] = []
-    if str(status) == "contradicted" or negative_count:
-        blocked_by.append("evidence_or_boundary_guardrail_failed")
-    elif str(status) == "needs_retry" or retry_count:
-        blocked_by.append("needs_retry_evidence")
     return validate_research_hypothesis(
         {
             "schema_version": RESEARCH_HYPOTHESIS_SCHEMA_VERSION,
@@ -317,7 +338,12 @@ def _research_hypothesis_from_rollout_event(event: dict[str, Any]) -> dict[str, 
             "status": status,
             "grounding_refs": grounding_refs,
             "novelty_audit_ref": novelty_audit_ref,
-            "blocked_by": blocked_by,
+            "blocked_by": _hypothesis_blocked_by(
+                status=status,
+                negative_count=negative_count,
+                retry_count=retry_count,
+            ),
+            **_rollout_contract_lineage(details),
         }
     )
 
@@ -349,6 +375,7 @@ def _research_evidence_from_rollout_event(event: dict[str, Any]) -> dict[str, An
             "remediation_attempt": bool(details.get("remediation_attempt")),
             "artifact_refs": event.get("artifact_refs") or [],
             "protected_scope_clean": bool(details.get("protected_scope_clean")),
+            **_rollout_contract_lineage(details),
         }
     )
 
@@ -374,6 +401,9 @@ def _synthetic_hypothesis_from_evidence(events: list[dict[str, Any]]) -> dict[st
             "grounding_refs": [],
             "novelty_audit_ref": None,
             "blocked_by": blocked_by,
+            "wish_id": first.get("wish_id"),
+            "contract_ref": first.get("contract_ref"),
+            "contract_revision": first.get("contract_revision"),
         }
     )
 
@@ -556,16 +586,9 @@ def build_research_evidence_graph_from_rollout_events(
     rollout_events: list[dict[str, Any]],
 ) -> dict[str, Any]:
     goal = _compact_public_token(goal_id, field="goal_id")
-    hypotheses_by_id: dict[str, dict[str, Any]] = {}
-    evidence_events: list[dict[str, Any]] = []
-    for event in rollout_events:
-        hypothesis = _research_hypothesis_from_rollout_event(event)
-        if hypothesis:
-            hypotheses_by_id[hypothesis["hypothesis_id"]] = hypothesis
-            continue
-        evidence = _research_evidence_from_rollout_event(event)
-        if evidence:
-            evidence_events.append(evidence)
+    hypotheses_by_id, evidence_events = _research_records_from_rollout_events(
+        rollout_events
+    )
 
     events_by_hypothesis: dict[str, list[dict[str, Any]]] = {}
     for evidence in evidence_events:
@@ -573,10 +596,21 @@ def build_research_evidence_graph_from_rollout_events(
     for hypothesis_id, events in events_by_hypothesis.items():
         if hypothesis_id not in hypotheses_by_id:
             hypotheses_by_id[hypothesis_id] = _synthetic_hypothesis_from_evidence(events)
+    evidence_events = [
+        evidence
+        for evidence in evidence_events
+        if auto_research_contract_lineage_matches(
+            evidence,
+            expected=normalize_auto_research_contract_lineage(
+                hypotheses_by_id.get(evidence["hypothesis_id"], {}),
+                field="hypothesis",
+            ),
+        )
+    ]
 
     first_metric_event = evidence_events[0] if evidence_events else None
     metric = first_metric_event["metric"] if first_metric_event else {}
-    return build_research_evidence_graph_from_records(
+    graph = build_research_evidence_graph_from_records(
         goal_id=goal,
         hypotheses=list(hypotheses_by_id.values()),
         evidence_events=evidence_events,
@@ -585,6 +619,68 @@ def build_research_evidence_graph_from_rollout_events(
         baseline_metric=first_metric_event.get("baseline_metric") if first_metric_event else None,
         source_kind=ROLLOUT_EVIDENCE_GRAPH_SOURCE_KIND,
     )
+    _apply_contract_lineage_to_graph(
+        graph,
+        hypotheses_by_id=hypotheses_by_id,
+    )
+    return graph
+
+
+def _research_records_from_rollout_events(
+    rollout_events: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    hypotheses_by_id: dict[str, dict[str, Any]] = {}
+    evidence_events: list[dict[str, Any]] = []
+    invalid_lineage_hypothesis_ids: set[str] = set()
+    for event in rollout_events:
+        try:
+            hypothesis = _research_hypothesis_from_rollout_event(event)
+        except AutoResearchContractLineageError:
+            invalid_lineage_hypothesis_ids.add(
+                str((event.get("details") or {}).get("hypothesis_id") or "")
+            )
+            continue
+        if hypothesis:
+            hypotheses_by_id[hypothesis["hypothesis_id"]] = hypothesis
+            continue
+        try:
+            evidence = _research_evidence_from_rollout_event(event)
+        except AutoResearchContractLineageError:
+            invalid_lineage_hypothesis_ids.add(
+                str((event.get("details") or {}).get("hypothesis_id") or "")
+            )
+            continue
+        if evidence:
+            evidence_events.append(evidence)
+    invalid_lineage_hypothesis_ids.discard("")
+    for hypothesis_id in invalid_lineage_hypothesis_ids:
+        hypotheses_by_id.pop(hypothesis_id, None)
+    evidence_events = [
+        event
+        for event in evidence_events
+        if event["hypothesis_id"] not in invalid_lineage_hypothesis_ids
+    ]
+    return hypotheses_by_id, evidence_events
+
+
+def _apply_contract_lineage_to_graph(
+    graph: dict[str, Any],
+    *,
+    hypotheses_by_id: dict[str, dict[str, Any]],
+) -> None:
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        hypothesis = hypotheses_by_id.get(str(node.get("hypothesis_id") or ""))
+        if not hypothesis:
+            continue
+        lineage = normalize_auto_research_contract_lineage(
+            hypothesis,
+            field="hypothesis",
+        )
+        if not lineage:
+            continue
+        node.update(auto_research_contract_lineage_dict(lineage))
 
 
 def build_research_evidence_graph(fixture: dict[str, Any]) -> dict[str, Any]:

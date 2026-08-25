@@ -66,12 +66,14 @@ def register_slash_commands_command(
             "cursor-agent",
             "zcode",
             "z-code",
+            "agy",
+            "antigravity",
             "pi",
         ],
         help=(
             "Host surface to install. Repeatable. Defaults to static command facades "
             "for Codex, Claude Code, and OpenCode. `gemini`, `cursor`, `zcode` and "
-            "`pi` are opt-in: they write into those hosts' own homes only when "
+            "`agy`, `pi` are opt-in: they write into those hosts' own homes only when "
             "requested."
         ),
     )

@@ -61,12 +61,16 @@ python3 -m pytest standalone-extension
 ```bash
 loopx --version
 loopx doctor
+loopx doctor --deep
 loopx start-goal --help
+loopx capability list --format json
 loopx extension --help
 ```
 
 命令存在不代表完整流程已验证。Host automation、visible Goal 和 Extension activation 需要各自的
-readback。
+readback；`doctor --deep` 还会启动并探测发布物携带的 TypeScript Effect runtime。迁移中的
+Python facade 成功返回，也不单独证明 TypeScript semantic owner、runtime decoder 和 durable
+effect path 都已通过。
 
 ### 3. Lifecycle validation
 
@@ -180,7 +184,8 @@ loopx check \
 - installer 与 `doctor`；
 - `connect` / `start-goal`；
 - Host surface 名称；
-- Codex App heartbeat 与 Codex CLI Goal activation；
+- Codex App heartbeat、Codex CLI Goal activation 和 Runtime Connector Catalog；
+- TypeScript migration RFC 的 shipped baseline、active phase 与 facade exit condition；
 - core protocol、state machine、bounded-context owner 与 quality catalog；
 - Extension manifest、doctor、run 与 lifecycle；
 - 书内步骤能否在当前官方 scaffold 与命令表面上复现。

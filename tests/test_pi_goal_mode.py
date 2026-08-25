@@ -45,7 +45,9 @@ def test_pi_guided_start_goal_delivers_packet_without_editor_box() -> None:
     # agent (same followUp/triggerTurn pattern as heartbeat injection) instead
     # of prefilling the editor: no popup box, no manual Enter step before the
     # agent follows the ordered transaction.
-    assert 'pi.sendUserMessage(stdout, { deliverAs: "followUp", triggerTurn: true })' in text
+    assert 'pi.sendUserMessage(JSON.stringify(deliveredPacket), {' in text
+    assert 'deliverAs: "followUp"' in text
+    assert 'triggerTurn: true' in text
     # The editor-prefill flow must not remain anywhere in the extension: it is
     # the mechanism that pops a box and forces the user to press Enter.
     assert "setEditorText" not in text
@@ -97,6 +99,36 @@ def test_pi_extension_runtime_is_managed_and_directly_executable() -> None:
     assert "export function createMemoryBindingStore" in text
     assert "export function createEphemeralSessionIdentity" in text
     assert "export function waitPlan" in text
+
+
+def test_pi_task_lease_facade_exposes_typed_cli_boundary() -> None:
+    text = runtime_source()
+    # The Pi host owns only binding/transport and argv construction. Lease
+    # state, transitions, and conflict decisions stay in the CLI contract.
+    assert "export function buildTaskLeaseArgs" in text
+    assert "export async function runPiTaskLease" in text
+    assert '"task-lease"' in text
+    assert '"task_lease_v0"' in text
+    assert "availableCapabilities" in text
+    assert "write_scope_conflict" not in text
+    assert "lease_cas_mismatch" not in text
+    assert "returncode" in text
+
+
+def test_pi_extension_registers_task_lease_as_an_explicit_tool() -> None:
+    text = extension_source()
+    assert 'name: "loopx_task_lease"' in text
+    assert "runPiTaskLease" in text
+    assert "registerTool" in text
+    assert "task_lease_v0" in text
+
+
+def test_pi_activation_uses_host_locked_session_authority() -> None:
+    text = extension_source()
+    assert "pi_session_authority" in text
+    assert "activationToken" in text
+    assert "establishSessionAuthority" in text
+    assert "LoopX host authority cannot change within one Pi session" in text
 
 
 def test_pi_extension_uses_ephemeral_identity_without_a_session_file() -> None:

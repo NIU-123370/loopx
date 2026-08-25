@@ -10,22 +10,30 @@ here once instead of being copied per surface.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
 
 def run_cli(
     *args: str, cwd: Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
+    subprocess_env = dict(os.environ if env is None else env)
+    existing_pythonpath = subprocess_env.get("PYTHONPATH")
+    subprocess_env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(REPOSITORY_ROOT), existing_pythonpath) if part
+    )
     return subprocess.run(
         [sys.executable, "-m", "loopx.cli", "--format", "json", *args],
         cwd=cwd,
         check=False,
         text=True,
         capture_output=True,
-        env=env,
+        env=subprocess_env,
     )
 
 

@@ -15,8 +15,19 @@ into a LoopX-governed visible goal loop.
   `/loopx resume` re-arms auto-continuation after a user-driven pause or an
   aborted run.
 - **`loopx_goal_activate`** — agent-callable tool. Binds the current session to
-  a LoopX goal (`goalId`, heartbeat `objective`/task_body, optional `agentId`,
-  `registryPath`, `availableCapabilities`), then starts the quota-gated loop.
+  the host-verified Pi startup/session packet using its one-time
+  `activationToken`, plus the heartbeat `objective`/task_body, then starts the
+  quota-gated loop. Goal, agent, registry, and mutation capabilities are
+  derived from that packet; compatibility echoes are rejected when they do not
+  match the locked authority.
+- **`loopx_task_lease`** — agent-callable, explicit facade over the existing
+  `task_lease_v0` CLI. It supports `acquire`, `renew`, `transfer`, `release`,
+  and read-only `inspect`. The active Pi binding supplies `goalId` and the
+  current owner; the model cannot substitute either authority. Mutation calls
+  require a non-empty host-verified bound `agentId` and the host-issued
+  `task_lease_v0` capability. Typed
+  conflict and CAS payloads (for example `write_scope_conflict` and
+  `lease_cas_mismatch`) are preserved as the tool result.
 - **Goal loop** — on every `agent_settled`, the extension probes
   `loopx quota should-run --runtime-profile generic_cli` for the bound goal.
   LoopX decides whether to continue (the heartbeat task_body is injected as a
@@ -40,7 +51,8 @@ Installs two LoopX-managed files into the project (loaded after project
 trust):
 
 - `.pi/extensions/loopx-goal.ts` — the extension adapter that registers
-  `/loopx`, `loopx_goal_activate`, and the `agent_settled` loop wiring.
+  `/loopx`, `loopx_goal_activate`, `loopx_task_lease`, and the `agent_settled`
+  loop wiring.
 - `.pi/extensions/pi-goal-loop-runtime.mjs` — the quota/wait/store loop core
   (not auto-discovered as an extension; the adapter imports it directly).
 
@@ -59,6 +71,64 @@ Sessions without a session file (`pi --no-session`) are ephemeral: the
 adapter uses a unique in-memory identity per extension instance and never
 persists its binding, so a later `--no-session` run cannot inherit the
 previous run's goal and must activate again through `loopx_goal_activate`.
+
+## Explicit task leases
+
+Lease support is explicit at the tool call, while its mutation capability is
+host-bound. Start the Pi flow with `/loopx <goal text>` and use the
+`pi_session_authority.token` from that startup packet when activating:
+
+```text
+loopx_goal_activate({
+  activationToken: "<pi_session_authority.token>",
+  objective: "<heartbeat_prompt.task_body>"
+})
+```
+
+The authority is locked to this Pi session. A later activation that changes the
+goal, agent, registry, or capability set returns a typed authority failure and
+does not reach the lease CLI. Re-run `/loopx <goal text>` in a new host session
+when a different authority is required.
+
+After activation, call the lease tool with only the lifecycle fields:
+
+```text
+loopx_task_lease({
+  action: "acquire",
+  todoId: "todo_ab12cd34ef56",
+  idempotencyKey: "pi-turn-42",
+  writeScopes: ["loopx/**"],
+  ttlSeconds: 2700
+})
+```
+
+`renew`, `transfer`, and `release` require the lease's `expectedVersion`;
+`transfer` additionally takes `newOwner` and `newIdempotencyKey`. `inspect`
+is read-only and only needs the active goal binding. Pi does not automatically
+acquire, renew, transfer, or release leases. The equivalent CLI fallback is:
+
+```bash
+loopx --registry <registry> --format json task-lease acquire \
+  --goal-id <goal> --todo-id <todo> --owner <agent> \
+  --idempotency-key <turn-key> --write-scope 'loopx/**'
+```
+
+The same fallback uses `renew`, `transfer`, `release`, or `inspect` in place
+of `acquire`; `renew`/`transfer`/`release` pass `--expected-version`, and
+`transfer` also passes `--new-owner` and `--new-idempotency-key`:
+
+```bash
+loopx --registry <registry> --format json task-lease renew \
+  --goal-id <goal> --todo-id <todo> --owner <agent> \
+  --idempotency-key <turn-key> --expected-version <version>
+loopx --registry <registry> --format json task-lease inspect \
+  --goal-id <goal> --todo-id <todo>
+```
+
+The tool exposes public-safe typed receipts and conflicts only. It does not
+grant authority outside the active LoopX goal binding, bypass registration,
+change quota/scheduler/todo defaults, or copy Pi transcripts, credentials, or
+session paths into LoopX state.
 
 ## Boundary
 

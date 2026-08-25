@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .artifact_receipt import load_auto_research_artifact_receipt
 from .human_view import render_auto_research_markdown
 from .research_state import (
     build_auto_research_projection,
@@ -75,6 +76,7 @@ AUTO_RESEARCH_IO_FAILED_ERROR_CODE = "auto_research_io_failed"
 AUTO_RESEARCH_SUBCOMMANDS = frozenset(
     {
         "append-evidence",
+        "artifact-receipt",
         "capture-live-evidence",
         "contract",
         "decide",
@@ -502,6 +504,20 @@ def register_auto_research_commands(
         "--execute",
         action="store_true",
         help="Append the deterministic Explore events. Omit to preview.",
+    )
+
+    artifact_receipt_parser = auto_research_sub.add_parser(
+        "artifact-receipt",
+        help=(
+            "Build a read-only Wish-to-Artifact receipt from one delivery "
+            "contract and the current Auto Research evidence."
+        ),
+    )
+    add_subcommand_format(artifact_receipt_parser)
+    artifact_receipt_parser.add_argument(
+        "--contract",
+        required=True,
+        help="Path to auto_research_delivery_contract_v0 JSON.",
     )
 
     live_evidence_parser = auto_research_sub.add_parser(
@@ -1245,6 +1261,12 @@ def handle_auto_research_command(
                 goal_id=args.goal_id,
                 dry_run=not args.execute,
             )
+        elif args.auto_research_command == "artifact-receipt":
+            payload = load_auto_research_artifact_receipt(
+                contract_path=args.contract,
+                registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg,
+            )
         elif args.auto_research_command == "capture-live-evidence":
             payload = capture_live_codex_e2e_evidence(
                 packet_path=args.packet,
@@ -1452,7 +1474,7 @@ def handle_auto_research_command(
             raise ValueError(
                 "auto-research requires the `contract`, `frontier`, `evidence`, "
                 "`append-evidence`, `decide`, `review`, `results`, "
-                "`project-results`, `capture-live-evidence`, "
+                "`project-results`, `artifact-receipt`, `capture-live-evidence`, "
                 "`worker-turn`, `worker-loop`, `demo-supervisor`, `demo-e2e`, "
                 "or `start` subcommand"
             )

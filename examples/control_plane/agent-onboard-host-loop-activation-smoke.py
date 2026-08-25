@@ -131,7 +131,7 @@ def main() -> int:
     assert pi["host_surface"] == "pi_visible_goal_mode", pi
     assert pi["host_mutation"]["host_tool"] == "loopx_goal_activate", pi
     assert pi["host_mutation"]["tool_argument_mapping"]["goalId"] == (
-        "heartbeat_prompt.goal_id"
+        "optional compatibility echo; host authority derives the value"
     ), pi
     assert "--runtime-profile generic_cli" in pi["commands"]["heartbeat_prompt"], pi
     assert ark_managed_agent["activation_method"] == "submit_goal_once", ark_managed_agent

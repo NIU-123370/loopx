@@ -50,6 +50,8 @@ def _surface_install_command(agent_type: str, cli_bin: str, project: str) -> str
         return f"{shell_arg(cli_bin)} slash-commands --install --surface cursor"
     if agent_type == "zcode":
         return f"{shell_arg(cli_bin)} slash-commands --install --surface zcode"
+    if agent_type == "agy":
+        return f"{shell_arg(cli_bin)} slash-commands --install --surface agy"
     if agent_type == "pi":
         # The slash-commands installer resolves the Pi extension target through
         # --pi-project; pass the resolved project so the command stays correct
@@ -279,6 +281,7 @@ def _bootstrap_pack_command(
         "gemini-cli": "gemini-cli",
         "cursor-agent": "cursor-agent",
         "zcode": "zcode",
+        "agy": "agy",
         "deepseek-harness": "deepseek-harness",
         "deepseek-harness-native": "deepseek-harness-native",
         "ark-managed-agent": "ark-managed-agent",
@@ -339,6 +342,18 @@ def _start_instruction(agent_type: str) -> str:
             "Invoke `$loopx` (or the LoopX skill from `ZCODE_HOME/skills`); after "
             "todo writeback, carry the generated heartbeat task body as the "
             "session objective and start every following turn with `quota should-run`."
+        )
+    if agent_type == "agy":
+        return (
+            "Invoke the LoopX skill from the fixed agy skills root "
+            "`~/.gemini/antigravity-cli/skills` via `/loopx <task>`; after todo "
+            "writeback, bind the objective with the native `/goal <task_body>` "
+            "command (agy audits work until `<!-- GOAL_COMPLETE -->`; cancel "
+            "with `<!-- GOAL_CANCELLED -->`), start every following turn, wake "
+            "and audit-continuation with `quota should-run`, and arm the next "
+            "bounded wake with the native `schedule` tool (DurationSeconds + "
+            "wake Prompt; recurring via MaxIterations) when quota allows more "
+            "work."
         )
     if agent_type == "deepseek-harness":
         return (

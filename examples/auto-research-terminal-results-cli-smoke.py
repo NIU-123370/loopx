@@ -4,11 +4,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -22,83 +20,25 @@ from examples.auto_research_lightweight_fixture import (  # noqa: E402
     HYPOTHESIS_TEXT,
     MECHANISM_FAMILY,
     TODO_ID,
+    run_auto_research_cli,
     write_contract_and_results,
+    write_registry,
 )
 
 
 PROMOTER = "evaluator-promoter"
 REVIEWER = "independent-reviewer"
 
-
-def run_cli(
-    registry: Path,
-    *args: str,
-    expect_ok: bool = True,
-) -> dict[str, Any]:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "loopx.cli",
-            "--registry",
-            str(registry),
-            "--format",
-            "json",
-            "auto-research",
-            *args,
-        ],
-        cwd=REPO_ROOT,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    payload = json.loads(result.stdout)
-    if expect_ok:
-        assert result.returncode == 0 and payload["ok"] is True, (result, payload)
-    else:
-        assert result.returncode != 0 and payload["ok"] is False, (result, payload)
-    return payload
-
-
 def main() -> int:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
-        runtime_root = temp / "runtime"
-        project = temp / "project"
-        project.mkdir()
-        registry = temp / "registry.json"
-        registry.write_text(
-            json.dumps(
-                {
-                    "schema_version": "0.1",
-                    "common_runtime_root": str(runtime_root),
-                    "goals": [
-                        {
-                            "id": GOAL_ID,
-                            "repo": str(project),
-                            "state_file": "ACTIVE_GOAL_STATE.md",
-                            "adapter": {
-                                "kind": "fixture",
-                                "status": "connected-read-only",
-                            },
-                            "coordination": {
-                                "agent_model": "peer_v1",
-                                "registered_agents": [
-                                    AGENT_ID,
-                                    PROMOTER,
-                                    REVIEWER,
-                                ],
-                            },
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
+        registry = write_registry(
+            temp,
+            registered_agents=[AGENT_ID, PROMOTER, REVIEWER],
         )
         contract, dev, holdout = write_contract_and_results(temp)
         packet_path = temp / "packet.json"
-        packet = run_cli(
+        packet = run_auto_research_cli(
             registry,
             "evidence",
             "--contract",
@@ -121,13 +61,13 @@ def main() -> int:
             HYPOTHESIS_TEXT,
         )
         packet_path.write_text(json.dumps(packet), encoding="utf-8")
-        run_cli(
+        run_auto_research_cli(
             registry,
             "append-evidence",
             "--packet",
             str(packet_path),
         )
-        unregistered = run_cli(
+        unregistered = run_auto_research_cli(
             registry,
             "decide",
             "--goal-id",
@@ -144,7 +84,7 @@ def main() -> int:
             expect_ok=False,
         )
         assert "not registered" in unregistered["error"], unregistered
-        run_cli(
+        run_auto_research_cli(
             registry,
             "decide",
             "--goal-id",
@@ -161,7 +101,7 @@ def main() -> int:
             "decision:heldout",
             "--execute",
         )
-        self_review = run_cli(
+        self_review = run_auto_research_cli(
             registry,
             "review",
             "--goal-id",
@@ -175,7 +115,7 @@ def main() -> int:
             "--execute",
         )
         assert self_review["review"]["independent"] is False, self_review
-        run_cli(
+        run_auto_research_cli(
             registry,
             "review",
             "--goal-id",
@@ -191,7 +131,7 @@ def main() -> int:
             "review:independent",
             "--execute",
         )
-        result = run_cli(
+        result = run_auto_research_cli(
             registry,
             "results",
             "--goal-id",
@@ -201,14 +141,14 @@ def main() -> int:
             "--include-history",
         )
         assert result["results"][0]["finding_status"] == "confirmed", result
-        first = run_cli(
+        first = run_auto_research_cli(
             registry,
             "project-results",
             "--goal-id",
             GOAL_ID,
             "--execute",
         )
-        second = run_cli(
+        second = run_auto_research_cli(
             registry,
             "project-results",
             "--goal-id",
@@ -218,7 +158,7 @@ def main() -> int:
         assert first["appended_count"] > 0, first
         assert second["appended_count"] == 0, second
         assert second["reused_count"] == second["event_count"], second
-        readback = run_cli(
+        readback = run_auto_research_cli(
             registry,
             "results",
             "--goal-id",

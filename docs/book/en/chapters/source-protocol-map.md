@@ -262,6 +262,14 @@ Protocols define cross-module contracts. Bounded contexts identify which change 
 | `handoff` | Cross-runtime handoff, review packets, and owner routes |
 | `work_items` | Attention, selection, and operator-facing work read models |
 
+On the `v0.5.2` migration baseline, bounded context and implementation language are separate dimensions.
+Some rules under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` already have
+TypeScript semantic owners beside Python facade modules that may serve only as CLI transport, legacy
+projection, or an explicit external-Provider adapter. Read the shipped baseline in the
+[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
+and trace the active request handler and caller before assigning ownership. A Python entrypoint does not
+prove that Python still owns the decision.
+
 Ask:
 
 ```text
@@ -298,6 +306,12 @@ Treat repository routes as owners, not as automatic placement from a directory n
 | Host or Runner integration | Runtime connector, Turn and Host contracts, and the matching adapter |
 | Operator projection | Status, frontstage, or projection owner; a renderer only consumes the typed model |
 | Documentation and validation | Owning protocol document, `tests/`, `examples/`, or a public-safe fixture |
+
+Current capability packages own their documentation and register through `catalog_entry.py`. Before
+contributing, run `loopx capability list --format json` and
+`loopx capability show <capability-id> --format json` to confirm that the capability is registered and to
+read its entry commands, Provider boundary, and durable validation. A directory or README alone does not
+prove that a capability is shipped.
 
 Code under `loopx/capabilities/<name>/` is not automatically a public Capability; it still needs explicit
 registration and a real caller contract. `loopx/extensions/` is not a bucket for every external

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .agent_registry import normalize_registered_agents
+from .agy_goal_mode import AGY_ACCEPTED_INPUTS, agy_activation_extras
 from .control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from .control_plane.todos.contract import (
     normalize_required_capabilities,
@@ -17,6 +18,7 @@ from .project_prompt import (
 SCHEMA_VERSION = "loopx_host_loop_activation_v1"
 AGENT_TYPE_CATALOG_SCHEMA_VERSION = "loopx_agent_type_catalog_v0"
 IDENTITY_SELECTION_SCHEMA_VERSION = "loopx_host_loop_identity_selection_v0"
+PI_OPTIONAL_COMPAT_ECHO = "optional compatibility echo; host authority derives the value"
 HOST_MANAGED_SKILL_AGENT_TYPES = frozenset(
     {
         "ark-managed-agent",
@@ -46,6 +48,7 @@ def scheduler_command_binding_for_agent_type(
         "gemini-cli": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "cursor-agent": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "zcode": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "agy": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness-native": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
     }.get(canonical)
@@ -73,6 +76,7 @@ SUPPORTED_AGENT_TYPES = [
     "gemini-cli",
     "cursor-agent",
     "zcode",
+    "agy",
     "deepseek-harness",
     "deepseek-harness-native",
     "manual",
@@ -249,6 +253,12 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
             "z-code",
         ],
     },
+    "agy": {
+        "display_name": "Antigravity CLI",
+        "host_loop": "Antigravity CLI native /goal loop with schedule self-wakes (LoopX quota pacing is advisory)",
+        "entry": "the LoopX skill installed in ~/.gemini/antigravity-cli/skills",
+        "accepted_inputs": list(AGY_ACCEPTED_INPUTS),
+    },
     "deepseek-harness": {
         "display_name": "DeepSeek Harness",
         "host_loop": "DeepSeek Harness headless/automation loop gated by LoopX quota",
@@ -350,6 +360,9 @@ HOST_SURFACE_TO_AGENT_TYPE = {
     "cursor": "cursor-agent",
     "zcode": "zcode",
     "z-code": "zcode",
+    "agy": "agy",
+    "antigravity": "agy",
+    "antigravity-cli": "agy",
     "deepseek-harness": "deepseek-harness",
     "dsh": "deepseek-harness",
     "deepseek-harness-native": "deepseek-harness-native",
@@ -485,6 +498,7 @@ def _heartbeat_commands(
         "gemini-cli": "Gemini CLI agent loop gated by LoopX",
         "cursor-agent": "Cursor Agent CLI loop gated by LoopX",
         "zcode": "ZCode agent loop gated by LoopX",
+        "agy": "Antigravity CLI agent loop with advisory LoopX quota pacing",
         "deepseek-harness": "DeepSeek Harness automation loop gated by LoopX",
         "deepseek-harness-native": "DeepSeek Harness same-session plugin loop gated by LoopX",
         "manual": "External scheduler or manual shell LoopX poll",
@@ -873,11 +887,12 @@ def _pi_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
             "owner": "Pi LoopX goal extension",
             "host_tool": "loopx_goal_activate",
             "tool_argument_mapping": {
-                "goalId": "heartbeat_prompt.goal_id",
+                "activationToken": "pi_session_authority.token from the host startup/session packet",
+                "goalId": PI_OPTIONAL_COMPAT_ECHO,
                 "objective": "heartbeat_prompt.task_body",
-                "agentId": "heartbeat_prompt.agent_id when present",
-                "registryPath": "explicit registry path when present",
-                "availableCapabilities": "declared host capabilities when present",
+                "agentId": PI_OPTIONAL_COMPAT_ECHO,
+                "registryPath": PI_OPTIONAL_COMPAT_ECHO,
+                "availableCapabilities": PI_OPTIONAL_COMPAT_ECHO,
             },
             "cli_can_mutate_directly": False,
             "missing_host_tool_gate": (
@@ -889,7 +904,7 @@ def _pi_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
         "activation_steps": [
             "Install or refresh the LoopX Pi surface when needed.",
             "Run the heartbeat-prompt JSON command after project state and todos are written.",
-            "Call loopx_goal_activate with goalId from goal_id, objective from task_body, and optional agentId, registryPath, or availableCapabilities when those values are present.",
+            "Call loopx_goal_activate with the activationToken from the host startup/session packet and objective from task_body; authority fields are host-derived and must not be changed by the model.",
             "Let the extension gate every settled continuation and timer wake through LoopX quota should-run.",
         ],
         "success_criteria": [
@@ -1055,20 +1070,25 @@ def _skill_facade_cli_activation(
     skills_root: str,
     extra_host_mutation: dict[str, Any] | None = None,
     extra_activation_steps: list[str] | None = None,
+    host_scheduler_note: str | None = None,
+    activation_method: str = "run_agent_cli_loop_gated_by_quota",
 ) -> dict[str, Any]:
     """Activation for a CLI host that LoopX reaches through a skill facade.
 
     For skill-facade CLI hosts where no direct host-native loop binding is
     integrated, the loop driver is the agent's own turn loop and LoopX gates it
-    by requiring every continuation to enter through quota should-run. That is a
-    weaker guarantee than a host-owned loop and is stated as such, because
-    claiming autonomous heartbeat support these hosts cannot deliver is worse
-    than admitting the agent drives itself.
+    by requiring every continuation to enter through quota should-run. A host
+    that does ship a native in-session scheduler passes ``host_scheduler_note``
+    so the packet states that primitive instead of the default no-scheduler
+    sentence. A host that also owns a native goal primitive overrides
+    ``activation_method`` to name the goal binding. The weaker facade boundary
+    remains explicit rather than claiming autonomous heartbeat support the host
+    cannot deliver.
     """
     return {
         "host_surface": host_surface,
         "entry_command_hint": f"the LoopX skill installed in {skills_root}",
-        "activation_method": "run_agent_cli_loop_gated_by_quota",
+        "activation_method": activation_method,
         "activation_input_command": commands["heartbeat_prompt_json"],
         "setup_command": (
             f"{cli_bin} slash-commands --install --surface {install_surface}"
@@ -1092,7 +1112,10 @@ def _skill_facade_cli_activation(
             "Read task_body from the JSON payload and carry it as the session objective.",
             *(extra_activation_steps or []),
             "Start every following turn with quota should-run and stop when it says stop; "
-            "there is no host scheduler to fall back on.",
+            + (
+                host_scheduler_note
+                or "there is no host scheduler to fall back on."
+            ),
         ],
         "success_criteria": [
             f"The {host_label} session has the LoopX skill facade installed and the "
@@ -1154,6 +1177,18 @@ def _zcode_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
                 "to run and do not claim autonomous heartbeat support."
             ),
         },
+    )
+
+
+def _agy_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
+    return _skill_facade_cli_activation(
+        commands,
+        cli_bin,
+        host_label="Antigravity CLI",
+        host_surface="agy_agent_loop",
+        install_surface="agy",
+        skills_root="~/.gemini/antigravity-cli/skills",
+        **agy_activation_extras(),
     )
 
 
@@ -1316,6 +1351,8 @@ def build_host_loop_activation_packet(
         surface = _cursor_agent_activation(commands, cli_bin)
     elif canonical == "zcode":
         surface = _zcode_activation(commands, cli_bin)
+    elif canonical == "agy":
+        surface = _agy_cli_activation(commands, cli_bin)
     elif canonical == "deepseek-harness":
         surface = _deepseek_harness_activation(commands)
     elif canonical == "deepseek-harness-native":

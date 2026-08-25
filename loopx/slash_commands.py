@@ -75,6 +75,7 @@ def build_slash_command_catalog(
                     "gemini-cli": "drive the loop from the agent's own turns; enter every turn through quota should-run",
                     "cursor-agent": "drive the loop from the agent's own turns; enter every turn through quota should-run",
                     "zcode": "drive the loop from the agent's turns; enter through quota should-run",
+                    "agy": "native /goal + schedule wakes; quota entry advisory",
                     "manual": "wire an external scheduler or run quota/status manually",
                     "other-agent": "use the custom host loop driver declared by `loopx agent-onboard`",
                 },

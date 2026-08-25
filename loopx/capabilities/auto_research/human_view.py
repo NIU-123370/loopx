@@ -7,6 +7,7 @@ on legacy presentation helpers.
 
 from __future__ import annotations
 
+from .artifact_receipt import AUTO_RESEARCH_ARTIFACT_RECEIPT_SCHEMA_VERSION
 from .evidence_packet import AUTO_RESEARCH_ROLLOUT_APPEND_SCHEMA_VERSION
 from .preset import build_auto_research_minimal_a2a_recipe
 from .user_contract import AUTO_RESEARCH_USER_CONTRACT_SCHEMA_VERSION
@@ -368,7 +369,7 @@ def _render_worker_turn(payload: dict[str, object]) -> str:
         f"- holdout_metric: `{payload.get('holdout_metric')}`",
         f"- appended_count: `{append.get('appended_count')}`",
         f"- live_evidence_written: `{live_evidence.get('written')}`",
-        f"- public_boundary: raw_logs=`False`, private_artifacts=`False`, paths=`local-only`",
+        "- public_boundary: raw_logs=`False`, private_artifacts=`False`, paths=`local-only`",
     ]
     return "\n".join(lines) + "\n"
 
@@ -750,6 +751,40 @@ def _render_terminal_result_projection(payload: dict[str, object]) -> str:
     ) + "\n"
 
 
+def _render_artifact_receipt(payload: dict[str, object]) -> str:
+    wish = _dict_value(payload, "wish")
+    contract = _dict_value(payload, "contract")
+    artifacts = _dict_value(payload, "artifacts")
+    feedback = _dict_value(payload, "failure_feedback")
+    lines = [
+        "# LoopX Auto Research Artifact Receipt",
+        "",
+        f"- goal_id: `{payload.get('goal_id')}`",
+        f"- wish_id: `{wish.get('wish_id')}`",
+        f"- status: `{payload.get('status')}`",
+        f"- contract_state: `{contract.get('state')}`",
+        f"- contract_revision: `{contract.get('contract_revision')}`",
+        f"- observed_artifacts: `{len(artifacts.get('observed_refs') or [])}`",
+        f"- missing_required_artifacts: `{len(artifacts.get('missing_required_refs') or [])}`",
+    ]
+    if feedback:
+        lines.extend(
+            [
+                "",
+                "## Feedback",
+                "",
+                str(feedback.get("summary") or ""),
+                "",
+                f"- failure_kinds: `{_join_or_none(feedback.get('failure_kinds'))}`",
+                f"- unmet_criteria: `{_join_or_none(feedback.get('unmet_criteria'))}`",
+                f"- verified_boundary: `{_join_or_none(feedback.get('verified_boundary'))}`",
+                f"- fallback_artifacts: `{_join_or_none(feedback.get('fallback_artifact_refs'))}`",
+                f"- reentry_conditions: `{_join_or_none(feedback.get('reentry_conditions'))}`",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _render_generic(payload: dict[str, object]) -> str:
     lines = [
         "# LoopX Auto Research",
@@ -791,4 +826,6 @@ def render_auto_research_markdown(payload: dict[str, object]) -> str:
         return _render_terminal_result_query(payload)
     if schema == "auto_research_terminal_result_projection_v0":
         return _render_terminal_result_projection(payload)
+    if schema == AUTO_RESEARCH_ARTIFACT_RECEIPT_SCHEMA_VERSION:
+        return _render_artifact_receipt(payload)
     return render_auto_research_projection_markdown(payload)

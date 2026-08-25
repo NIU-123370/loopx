@@ -99,7 +99,8 @@ Command snippets fall into three categories:
 
 The English and Chinese editions share the same product facts. The Chinese root edition is the editorial
 source of truth; the English edition is organized for English-speaking external developers rather than
-maintained as a separate product specification.
+maintained as a separate product specification. The two editions are semantic mirrors: a material
+difference in version facts, status, commands, boundaries, or conclusions is a documentation defect.
 
 | Subject | Authority |
 | --- | --- |
@@ -113,14 +114,19 @@ Do not bypass a newer permission or lifecycle check just to make an older exampl
 
 ## Version baseline
 
-The current release anchor is LoopX GitHub release `v0.4.4`. Local command examples were checked against
-the installed `loopx 0.4.4` CLI surface. A release tag, installed CLI, and source checkout can be on
-different revisions, so verify these surfaces against your actual environment:
+The current release anchor is LoopX GitHub release `v0.5.2`. Local command examples were checked against
+the public `loopx 0.5.2` CLI and protocol surface. This release requires Python 3.11+ and Node.js 22.6+.
+LoopX starts and reuses its managed, idle-exiting TypeScript Effect runtime automatically; users do not
+operate that runtime as a manual daemon.
+
+A release tag, installed CLI, and source checkout can be on different revisions, so verify these surfaces
+against your actual environment:
 
 - install and update;
 - Host activation;
 - the `start-goal` guided packet;
-- Codex App heartbeat and visible Codex CLI Goal behavior;
+- Codex App heartbeat, visible Codex CLI Goal behavior, and other optional Hosts;
+- TypeScript Effect runtime readiness;
 - Extension manifest and lifecycle commands.
 
 Before running commands from the book:
@@ -128,11 +134,44 @@ Before running commands from the book:
 ```bash
 loopx --version
 loopx doctor
+node --version
 ```
 
 If your version differs, inspect current command help and release notes before deciding whether you found
 documentation drift, a release difference, or a product behavior change. This book does not guess what
 different version identifiers imply.
+
+### How to read the TypeScript migration
+
+`v0.5.2` does not mean that all of LoopX has been rewritten in TypeScript. The current release baseline is:
+
+- TypeScript owns the canonical semantics for migrated slices of the Effect Program, Turn settlement,
+  Todo completion, quota delivery routing, workspace causality, and scheduler transition/state;
+- during the migration, the Python CLI still owns transport, legacy response projection, explicit
+  external Provider calls, and some Markdown/event writeback;
+- each migrated rule has one semantic owner. A Python facade adapts a TypeScript transaction; it must not
+  become a second independent decision implementation;
+- current `main` is in the transaction-payoff phase: later progress is measured by complete transaction
+  cutovers and deleted legacy semantics, not by accumulating leaf helpers and bridge calls.
+
+Treat the `v0.5.2` tag and release notes as the shipped baseline. Use the current status of the
+[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
+for later cutovers and final CLI/App convergence. RFC Stages 3 and 4 remain future direction, not shipped
+behavior.
+
+### Updating your mental model from `v0.4.4` to `v0.5.2`
+
+If you read an earlier edition of the Dev Book, recalibrate these four areas first:
+
+| Area | Shipped in `v0.5.2` | Continue with |
+| --- | --- | --- |
+| Control Plane | Several high-risk decisions and effects have typed TypeScript transaction owners; Python facades still carry migration-time boundaries | [Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
+| Operator surface | Personal Workspace exposes Goal, Task, Chat, and read-only status-source entrypoints; the UI is not a new source of truth | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.2/apps/presentation/dashboard/README.md) |
+| Host runtime | Codex, Claude Code, OpenCode, Pi, KunlunCode, DeepSeek Harness, and custom runners have distinct activation and stop contracts | [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/) |
+| Capability and Provider | A Capability is defined by a package-owned catalog entry, a real command, and durable validation; a Provider or Extension does not inherit Kernel authority | [Capability Catalog](/loopx/docs/capabilities/) |
+
+This table is a reading map, not a copy of the release notes. Confirm whether a surface is usable through
+the installed release's `doctor`, `capability show`, Host readback, and versioned documentation.
 
 ## Deliberate scope
 

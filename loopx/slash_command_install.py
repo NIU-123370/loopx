@@ -8,75 +8,27 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .agy_goal_mode import agy_home as _agy_home
 from .opencode_goal_mode import plugin_source, runtime_source
 from .pi_goal_mode import extension_source as pi_extension_source
 from .pi_goal_mode import runtime_source as pi_runtime_source
+from .slash_command_files import (
+    front_matter as _front_matter,
+    install_skill_facade as _install_skill_facade,
+    managed_marker as _managed_marker,
+    retire_managed_file as _retire_managed_file,
+    retire_status as _retire_status,
+    skill_body as _skill_body,
+    target_status as _target_status,
+)
 from .slash_commands import build_slash_command_catalog
 from .zcode_goal_mode import zcode_home as _zcode_home
 
 SCHEMA_VERSION = "loopx_slash_command_install_v0"
-MANAGED_MARKER_PREFIX = "<!-- loopx-managed-slash-command:v1"
-LEGACY_UPGRADABLE_SIGNATURES = (
-    "loopx goal-mode setup (NOT Claude Code's built-in /goal)",
-    "The output is loopx control-plane SETUP",
-    "goalmode_cmd.py",
-)
-EXISTING_LOOPX_CAPABILITY_SKILL_SIGNATURES = (
-    "# LoopX PR Review",
-    "Run `loopx pr-review` first",
-)
 OPENCODE_GOAL_DEPENDENCIES = {
     "@opencode-ai/plugin": ">=1.17.15 <2",
     "opencode-goal-plugin": "0.7.0",
 }
-
-
-def _managed_marker(*, command: str, surface: str) -> str:
-    return f"{MANAGED_MARKER_PREFIX} command={command} surface={surface} -->"
-
-
-def _front_matter(*, fields: dict[str, str]) -> str:
-    lines = ["---"]
-    for key, value in fields.items():
-        escaped = value.replace('"', '\\"')
-        lines.append(f'{key}: "{escaped}"')
-    lines.append("---")
-    return "\n".join(lines)
-
-
-def _skill_body(
-    *,
-    command: str,
-    title: str,
-    description: str,
-    argument_hint: str,
-    instructions: list[str],
-    surface: str,
-    front_matter_name: str | None = None,
-) -> str:
-    fields = {
-        "description": description,
-        "argument-hint": argument_hint,
-    }
-    if front_matter_name:
-        fields = {"name": front_matter_name, **fields}
-    surface_label = (
-        "slash command"
-        if surface == "claude-skills"
-        else "DSH workflow skill"
-        if surface == "dsh-skills"
-        else "explicit LoopX command skill"
-    )
-    return "\n\n".join(
-        [
-            _front_matter(fields=fields),
-            _managed_marker(command=command, surface=surface),
-            f"# {title}",
-            f"Treat this as the LoopX `{command}` {surface_label}.",
-            "\n".join(instructions),
-            "Keep public/private boundaries intact and do not perform external writes unless the active LoopX state or owner explicitly authorizes them.",
-        ]
-    ) + "\n"
 
 
 def _openai_skill_metadata(*, command: str, display_name: str, short_description: str) -> str:
@@ -207,7 +159,7 @@ def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list
             "argument_hint": "[--fine-grained] [--capability-route issue-fix] [task text]",
             "instructions": [
                 "Visible command arguments: `$ARGUMENTS`.",
-                "Identify the exact current host surface (codex-app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, deepseek-harness, or ark-managed-agent).",
+                "Identify the exact current host surface (codex-app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, agy, deepseek-harness, or ark-managed-agent).",
                 _loopx_start_goal_arguments_instruction(
                     cli_bin=cli_bin,
                     host_surface=None,
@@ -393,51 +345,6 @@ def materialize_loopx_entry_skill(
         "path": str(skill_path),
         "status": _target_status(skill_path, content, execute=execute),
     }
-
-
-def _is_legacy_upgradable_loopx_file(existing: str) -> bool:
-    return any(signature in existing for signature in LEGACY_UPGRADABLE_SIGNATURES)
-
-
-def _is_existing_loopx_capability_skill(existing: str) -> bool:
-    return any(signature in existing for signature in EXISTING_LOOPX_CAPABILITY_SKILL_SIGNATURES)
-
-
-def _target_status(path: Path, content: str, *, execute: bool) -> str:
-    if path.exists():
-        existing = path.read_text(encoding="utf-8")
-        if MANAGED_MARKER_PREFIX not in existing:
-            if _is_legacy_upgradable_loopx_file(existing):
-                if execute:
-                    path.write_text(content, encoding="utf-8")
-                return "upgraded_legacy_managed"
-            if path.name == "SKILL.md" and _is_existing_loopx_capability_skill(existing):
-                return "preserved_existing_loopx_skill"
-            return "skipped_user_file"
-        if existing == content:
-            return "unchanged"
-        if execute:
-            path.write_text(content, encoding="utf-8")
-        return "updated"
-    if execute:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    return "created" if execute else "would_create"
-
-
-def _retire_managed_file(path: Path, *, execute: bool) -> str | None:
-    if not path.exists():
-        return None
-    existing = path.read_text(encoding="utf-8")
-    if MANAGED_MARKER_PREFIX not in existing:
-        return "skipped_user_file"
-    if execute:
-        path.unlink()
-    return "retired_managed_file" if execute else "would_retire_managed_file"
-
-
-def _retire_status(path: Path, *, execute: bool) -> str:
-    return _retire_managed_file(path, execute=execute) or "absent"
 
 
 def _codex_home(value: str | None = None) -> Path:
@@ -656,6 +563,8 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
             candidates = ["cursor"]
         elif surface in {"zcode", "z-code"}:
             candidates = ["zcode"]
+        elif surface in {"agy", "antigravity", "antigravity-cli"}:
+            candidates = ["agy"]
         else:
             candidates = [surface]
         for candidate in candidates:
@@ -842,6 +751,7 @@ def install_slash_commands(
     cursor_home: str | None = None,
     zcode_home: str | None = None,
     zcode_agents_home: str | None = None,
+    agy_home: str | None = None,
     pi_project: str | None = None,
 ) -> dict[str, Any]:
     specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=include_legacy_aliases)
@@ -852,6 +762,7 @@ def install_slash_commands(
     gemini_root = _gemini_home(gemini_home)
     cursor_root = _cursor_home(cursor_home)
     zcode_root = _zcode_home(zcode_home or zcode_agents_home)
+    agy_root = _agy_home(agy_home)
     pi_project_root = Path(pi_project or ".").expanduser().resolve()
     installed: list[dict[str, Any]] = []
 
@@ -1042,56 +953,6 @@ def install_slash_commands(
                 }
             )
 
-    def _install_skill_facade(
-        *,
-        skills_dir: Path,
-        surface: str,
-        host_surfaces: list[str],
-        mechanism: str,
-        invoke_prefix: str = "",
-    ) -> None:
-        """Write the command facade as SKILL.md files under `skills_dir`.
-
-        Claude Code, Gemini CLI and Cursor all discover user skills the same
-        way — a directory per skill with SKILL.md front matter — so the body is
-        identical and only the root differs.
-        """
-        for spec in specs:
-            path = skills_dir / str(spec["name"]) / "SKILL.md"
-            if uninstall:
-                installed.append(
-                    {
-                        "surface": surface,
-                        "host_surfaces": list(host_surfaces),
-                        "mechanism": mechanism,
-                        "command": spec["command"],
-                        "path": str(path),
-                        "status": _retire_status(path, execute=execute),
-                        "invoke_as": [],
-                    }
-                )
-                continue
-            content = _skill_body(
-                command=str(spec["command"]),
-                title=f"LoopX {spec['command']}",
-                description=str(spec["description"]),
-                argument_hint=str(spec["argument_hint"]),
-                instructions=list(spec["instructions"]),
-                surface="claude-skills",
-                front_matter_name=str(spec["name"]),
-            )
-            installed.append(
-                {
-                    "surface": surface,
-                    "host_surfaces": list(host_surfaces),
-                    "mechanism": mechanism,
-                    "command": spec["command"],
-                    "path": str(path),
-                    "status": _target_status(path, content, execute=execute),
-                    "invoke_as": [f"{invoke_prefix}{spec['name']}"],
-                }
-            )
-
     if "gemini" in effective_surfaces:
         # Gemini CLI discovers user skills from GEMINI_HOME/skills. Files are
         # written directly, not through `gemini skills install --consent`: that
@@ -1100,10 +961,33 @@ def install_slash_commands(
         # status and the dry run that every other surface reports — and it would
         # need the `gemini` binary on PATH to install a file it already has.
         _install_skill_facade(
+            specs=specs,
+            installed=installed,
             skills_dir=gemini_root / "skills",
             surface="gemini",
             host_surfaces=["gemini-cli"],
             mechanism="gemini_cli_skills",
+            execute=execute,
+            uninstall=uninstall,
+        )
+
+    if "agy" in effective_surfaces:
+        # Antigravity CLI discovers global skills from the fixed
+        # ~/.gemini/antigravity-cli/skills root using the documented flat
+        # layout (one <name>.md per skill). The official docs describe no home
+        # override, so LoopX offers none: installs target exactly that path,
+        # and the root belongs to agy alone (Gemini CLI reads ~/.gemini/skills),
+        # so the managed skill surfaces never collide across different hosts.
+        _install_skill_facade(
+            specs=specs,
+            installed=installed,
+            skills_dir=agy_root / "skills",
+            surface="agy",
+            host_surfaces=["agy"],
+            mechanism="agy_cli_skills",
+            execute=execute,
+            uninstall=uninstall,
+            flat=True,
         )
 
     if "cursor" in effective_surfaces:
@@ -1111,10 +995,14 @@ def install_slash_commands(
         # include .claude/skills and .codex/skills, but relying on another
         # host's directory would break the moment that host is uninstalled).
         _install_skill_facade(
+            specs=specs,
+            installed=installed,
             skills_dir=cursor_root / "skills",
             surface="cursor",
             host_surfaces=["cursor-agent"],
             mechanism="cursor_skills",
+            execute=execute,
+            uninstall=uninstall,
         )
         # `cursor-agent mcp` can list and enable servers but not add them, so
         # the entry is merged into CURSOR_HOME/mcp.json. Only our own `loopx`
@@ -1135,10 +1023,14 @@ def install_slash_commands(
     if "zcode" in effective_surfaces:
         # ZCode discovers user skills from ZCODE_HOME/skills (default ~/.zcode/skills).
         _install_skill_facade(
+            specs=specs,
+            installed=installed,
             skills_dir=zcode_root / "skills",
             surface="zcode",
             host_surfaces=["zcode"],
             mechanism="zcode_skills",
+            execute=execute,
+            uninstall=uninstall,
             invoke_prefix="$",
         )
 
@@ -1147,10 +1039,14 @@ def install_slash_commands(
         # static command facade below stays as it is — a command is something
         # the user types, a skill is something the model can reach for itself.
         _install_skill_facade(
+            specs=specs,
+            installed=installed,
             skills_dir=opencode_root / "skills",
             surface="opencode",
             host_surfaces=["opencode"],
             mechanism="opencode_skills",
+            execute=execute,
+            uninstall=uninstall,
         )
         commands_dir = opencode_root / "commands"
         plugin_path = opencode_root / "plugins" / "loopx-goal.js"
@@ -1432,6 +1328,7 @@ def install_slash_commands(
             "cursor_skill_dir": str(cursor_root / "skills") if "cursor" in effective_surfaces else None,
             "cursor_mcp_path": str(cursor_root / "mcp.json") if "cursor" in effective_surfaces else None,
             "zcode_skill_dir": str(zcode_root / "skills") if "zcode" in effective_surfaces else None,
+            "agy_skill_dir": str(agy_root / "skills") if "agy" in effective_surfaces else None,
             "opencode_skill_dir": str(opencode_root / "skills") if "opencode" in effective_surfaces else None,
             "opencode_command_dir": str(opencode_root / "commands") if "opencode" in effective_surfaces else None,
             "opencode_plugin_path": str(opencode_root / "plugins" / "loopx-goal.js") if "opencode" in effective_surfaces and with_goal_bridge else None,
@@ -1453,6 +1350,7 @@ def install_slash_commands(
             "Gemini CLI discovers user skills from GEMINI_HOME/skills with the same SKILL.md front matter; files are written directly because `gemini skills install` copies from a git URL or an existing local path and hands the copy to the host, which would lose the managed marker, per-file status and dry-run reporting every other surface has.",
             "Cursor discovers skills from CURSOR_HOME/skills and has no user-defined slash commands, so the cursor surface installs the skill facade and registers the LoopX MCP server in CURSOR_HOME/mcp.json; run `cursor-agent mcp enable loopx` once to approve it.",
             "ZCode discovers user skills from ZCODE_HOME/skills (default ~/.zcode/skills) and exposes each skill for invocation via `$skill-name` or Settings -> Skills.",
+            "Antigravity CLI discovers global skills from the fixed ~/.gemini/antigravity-cli/skills root using the documented flat layout (one <name>.md per skill); the agy surface is opt-in and offers no home override because the host documents none.",
             "OpenCode discovers global skills from OPENCODE_CONFIG_DIR/skills in addition to the static command facade; a command is typed by the user, a skill can be reached by the model itself.",
             "The default all surface installs only OpenCode's static command facade; the executable goal bridge requires --with-goal-bridge.",
             "The Pi surface is opt-in and installs the self-contained goal extension and its loop runtime into the project's .pi/extensions/; it is not part of the default all surface.",

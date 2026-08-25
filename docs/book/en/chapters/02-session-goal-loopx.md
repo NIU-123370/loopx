@@ -237,12 +237,17 @@ defines these main paths:
 | Codex App over SSH | Visible `/goal` | Does not depend on App automation tools |
 | Codex CLI TUI | Generated bootstrap plus visible `/goal` | Stays visible and interruptible |
 | Claude Code | `/loopx` plus opt-in native `/loop` adapter | Uses the same quota and writeback |
-| OpenCode | `/loopx` plus opt-in Goal bridge | Bridge activation follows Todo writeback |
+| OpenCode 1/2 | `/loopx` plus an opt-in Goal bridge or persistent worker | The bridge or worker preserves Host visibility and stop semantics |
+| Pi | Opt-in Goal extension plus `/loopx` | Bindings stay under project `.loopx/` and grant no extra authority |
+| KunlunCode Goal Pro | `loopx-kunluncode` adapter | Completion and quota write back only after strict validation |
+| DeepSeek Harness | Native skill plus same-session Driver or `loopx turn run-once` | Every bounded execution segment still needs independent validation |
 | Shell / other Agent | Guided packet plus caller-owned runner | Caller owns wake-up without a runner hook |
 
 Catalog presence does not mean every Host exposes the same automation API. When `host_surface` is unknown,
 omit it once and follow the read-only selection Gate. Do not guess that a CLI, IDE plugin, App SSH
-workspace, or ordinary shell is a Codex App heartbeat.
+workspace, or ordinary shell is a Codex App heartbeat. Use the Runtime Connector Catalog and the
+corresponding Host documentation for complete startup, stop, and validation details; the Dev Book does
+not duplicate every adapter runbook.
 
 ## How Codex Goal and LoopX compose
 

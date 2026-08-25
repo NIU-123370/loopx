@@ -147,6 +147,7 @@ AUTO_RESEARCH_ROLE_PROFILES: dict[str, dict[str, object]] = {
             "review_terminal_decision",
         ],
         "write_scope": [
+            "auto_research_delivery_contract_v0",
             "research_contract_v0",
             "auto_research_peer_review_v0",
             "todo_item_v0",

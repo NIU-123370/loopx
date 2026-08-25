@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import re
+import tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +60,22 @@ COURSE_PAGES = (
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def compact(text: str) -> str:
+    return " ".join(text.split())
+
+
+def assert_bilingual_concepts(
+    zh_path: str,
+    en_path: str,
+    concepts: tuple[tuple[str, str], ...],
+) -> None:
+    zh_text = compact(read(BOOK / zh_path))
+    en_text = compact(read(BOOK / en_path))
+    for zh_marker, en_marker in concepts:
+        assert zh_marker in zh_text, f"{zh_path}: missing bilingual marker {zh_marker}"
+        assert en_marker in en_text, f"{en_path}: missing bilingual marker {en_marker}"
 
 
 def validate_rendered_site(site_dir: Path) -> None:
@@ -215,6 +232,31 @@ def main() -> int:
     assert "/loopx/docs/book/en/" in read(BOOK / "index.md")
     assert "/loopx/docs/book/" in read(BOOK / "en" / "index.md")
 
+    project_version = tomllib.loads(read(REPO_ROOT / "pyproject.toml"))["project"]["version"]
+    release_tag = f"v{project_version}"
+    release_markers = {
+        "index.md": (
+            f"LoopX 发布锚点：`{release_tag}`",
+            "TypeScript Control-Plane Migration RFC",
+        ),
+        "chapters/00-reading-guide.md": (
+            f"release `{release_tag}`",
+            "transaction-payoff phase",
+        ),
+        "en/index.md": (
+            f"LoopX release anchor: `{release_tag}`",
+            "TypeScript Control-Plane Migration RFC",
+        ),
+        "en/chapters/00-reading-guide.md": (
+            f"release `{release_tag}`",
+            "transaction-payoff phase",
+        ),
+    }
+    for relative_path, markers in release_markers.items():
+        text = read(BOOK / relative_path)
+        for marker in markers:
+            assert marker in text, f"{relative_path}: missing release-baseline marker {marker}"
+
     for page in COURSE_PAGES:
         assert (CONTROL_PLANE_COURSE / f"{page}.md").is_file(), page
 
@@ -226,6 +268,88 @@ def main() -> int:
         assert "/loopx/docs/development/control-plane-course/" in guide
         for page in COURSE_PAGES:
             assert f"/loopx/docs/development/control-plane-course/{page}/" in guide, page
+
+    assert_bilingual_concepts(
+        "index.md",
+        "en/index.md",
+        (
+            (f"LoopX 发布锚点：`{release_tag}`", f"LoopX release anchor: `{release_tag}`"),
+            ("运行时前提：Python 3.11+ 与 Node.js 22.6+", "Runtime prerequisites: Python 3.11+ and Node.js 22.6+"),
+            ("TypeScript owner", "TypeScript owners"),
+            ("这不是两套可独立演进的 控制面", "These are not two independently evolving control planes"),
+        ),
+    )
+    assert_bilingual_concepts(
+        "chapters/00-reading-guide.md",
+        "en/chapters/00-reading-guide.md",
+        (
+            ("语义镜像", "semantic mirrors"),
+            ("Python 3.11+", "Python 3.11+"),
+            ("Node.js 22.6+", "Node.js 22.6+"),
+            ("用户不需要手工维护 daemon", "users do not operate that runtime as a manual daemon"),
+            ("TypeScript 已拥有", "TypeScript owns"),
+            ("Python CLI 仍负责", "Python CLI still owns"),
+            ("不能再实现第二套独立 decision", "must not become a second independent decision implementation"),
+            ("transaction-payoff phase", "transaction-payoff phase"),
+            ("RFC 中的 Stage 3/4 仍是后续方向", "RFC Stages 3 and 4 remain future direction"),
+        ),
+    )
+    assert_bilingual_concepts(
+        "chapters/02-session-goal-loopx.md",
+        "en/chapters/02-session-goal-loopx.md",
+        tuple((marker, marker) for marker in (
+            "OpenCode 1/2",
+            "Pi",
+            "KunlunCode Goal Pro",
+            "DeepSeek Harness",
+            "Runtime Connector Catalog",
+        )),
+    )
+    assert_bilingual_concepts(
+        "chapters/03-one-turn.md",
+        "en/chapters/03-one-turn.md",
+        (
+            ("显式 opt-in 集成", "explicit opt-in integrations"),
+            ("Turn settlement", "Turn settlement"),
+            ("Todo completion", "Todo completion"),
+            ("quota delivery routing", "quota delivery routing"),
+            ("workspace causality", "workspace causality"),
+            ("scheduler state", "scheduler state"),
+            ("Python 已被移除", "Python has been removed"),
+            ("TypeScript Control-Plane Migration RFC", "TypeScript Control-Plane Migration RFC"),
+        ),
+    )
+    assert_bilingual_concepts(
+        "chapters/05-connect-existing-project.md",
+        "en/chapters/05-connect-existing-project.md",
+        (
+            ("Node.js 22.6", "Node.js 22.6"),
+            ("Windows PowerShell 7", "Windows PowerShell 7"),
+            ("loopx doctor --deep", "loopx doctor --deep"),
+            ("用户不需要手工维护 daemon", "users do not supervise a daemon manually"),
+            ("`missing`、`unsupported` 或 `probe_failed`", "`missing`, `unsupported`, or `probe_failed`"),
+        ),
+    )
+    assert_bilingual_concepts(
+        "chapters/source-protocol-map.md",
+        "en/chapters/source-protocol-map.md",
+        (
+            ("bounded context 和实现语言是两个维度", "bounded context and implementation language are separate dimensions"),
+            ("Python facade", "Python facade"),
+            ("loopx capability list --format json", "loopx capability list --format json"),
+            ("仅有 目录或 README 不证明能力已经发布", "A directory or README alone does not prove that a capability is shipped"),
+        ),
+    )
+    assert_bilingual_concepts(
+        "chapters/11-engineering-boundaries.md",
+        "en/chapters/11-engineering-boundaries.md",
+        (
+            ("loopx doctor --deep", "loopx doctor --deep"),
+            ("loopx capability list --format json", "loopx capability list --format json"),
+            ("TypeScript migration RFC", "TypeScript migration RFC"),
+            ("facade exit condition", "facade exit conditions"),
+        ),
+    )
 
     integrated_mechanisms = {
         "chapters/01-from-session-to-loop.md": (

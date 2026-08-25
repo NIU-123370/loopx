@@ -129,7 +129,8 @@ diagnosis and choices only. Do not write state, commit, or push.
 Prerequisites:
 
 - Python 3.11 or later;
-- a macOS or Linux shell;
+- Node.js 22.6 or later for the LoopX-managed TypeScript Effect runtime;
+- a macOS or Linux shell, or Windows PowerShell 7;
 - an existing Git project.
 
 Install the PyPI release and its LoopX workflow skills:
@@ -146,7 +147,19 @@ loopx doctor
 
 Treat `loopx doctor` as the installation fact. A successful `which loopx` only proves that one executable
 is on `PATH`; doctor also checks the release snapshot, Python import, installed skills, and Host
-integration.
+integration, and the TypeScript Effect runtime. LoopX starts that runtime automatically and lets it exit
+when idle; users do not supervise a daemon manually. `stopped` is a healthy on-demand state, while
+`missing`, `unsupported`, or `probe_failed` must be repaired first.
+
+Use the deep check when you need to verify the real runtime and journal checkpoint path:
+
+```bash
+node --version
+loopx doctor --deep
+```
+
+See [Installing LoopX](/loopx/docs/guides/installing-loopx/) for the complete native Windows installation,
+upgrade, and rollback path. Do not require WSL merely to reproduce the POSIX examples.
 
 ## 3. Establish the Git boundary
 

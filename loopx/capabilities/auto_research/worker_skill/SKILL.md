@@ -109,12 +109,14 @@ The pane-local tick can point at a todo; it cannot count as benchmark evidence.
 
 ## Research Curator
 
-Use when the role owns objective, metric, editable scope, protected scope,
+Use when the role owns the original research wish, objective, required
+artifacts, acceptance criteria, metric, editable scope, protected scope,
 budget, and gates.
 
 Allowed actions:
 
-- create or refresh `research_contract_v0`;
+- create or refresh `auto_research_delivery_contract_v0`, embedding the
+  existing `research_contract_v0`;
 - make protected boundaries explicit;
 - write user/operator gate todos when promotion or publication needs judgment;
 - request read-only projections from existing evidence.
@@ -130,9 +132,14 @@ loopx --format json auto-research frontier \
 Artifact contract:
 
 - objective is public-safe and bounded;
+- the original wish, assumptions, non-goals, and contract reference are
+  public-safe and explicit;
+- every required artifact and acceptance criterion has a stable public-safe id;
 - metric direction and protected evaluator are explicit;
 - write scope and protected scope are named;
 - promotion policy says what evidence is sufficient.
+- failure policy names fallback artifacts and the conditions for re-entering
+  research when the current contract cannot be fulfilled.
 
 Must not:
 
@@ -238,6 +245,12 @@ When evidence reaches a terminal boundary:
 - use `loopx auto-research review --require-independent` only from a different
   registered peer than both the hypothesis producer and decision agent;
 - treat self-review as visible review evidence, never as independent review;
+- when the curator supplied `auto_research_delivery_contract_v0`, run
+  `loopx auto-research artifact-receipt --contract <contract-file>` after the
+  terminal decision and required review;
+- return every non-verified receipt to the user with its failure kinds,
+  verified boundary, fallback artifacts, and reentry conditions; do not turn
+  one failed attempt into a terminal impossibility claim;
 - use `loopx auto-research project-results` after decisions and reviews so
   exact `loopx auto-research results` queries can verify Explore readback.
 
@@ -259,6 +272,9 @@ loopx auto-research review \
   --verdict approve \
   --require-independent \
   --execute
+
+loopx auto-research artifact-receipt \
+  --contract "<delivery-contract-file>"
 ```
 
 Must not:

@@ -231,12 +231,16 @@ LoopX 保留同一 control-plane contract，但不同 Host 的启动和唤醒机
 | Codex App over SSH | visible `/goal` | 不依赖 App automation tools |
 | Codex CLI TUI | generated bootstrap + visible `/goal` | 保持 visible、interruptible |
 | Claude Code | `/loopx` + opt-in native `/loop` adapter | 仍走同一 quota/writeback |
-| OpenCode | `/loopx` + opt-in Goal bridge | Todo 写回后还需 bridge activation |
+| OpenCode 1/2 | `/loopx` + opt-in Goal bridge / persistent worker | bridge 或 worker 保持 Host 可见性与停止语义 |
+| Pi | opt-in Goal extension + `/loopx` | 绑定保存在项目 `.loopx/`，不获得额外 authority |
+| KunlunCode Goal Pro | `loopx-kunluncode` adapter | 只在严格验证后写 completion 与 quota |
+| DeepSeek Harness | native skill + same-session Driver / `loopx turn run-once` | 每段 bounded execution 仍需独立 validation |
 | Shell / other Agent | guided packet + caller-owned runner | 无 runner hook 时由调用方唤醒 |
 
 表中出现一个 Host 不代表所有 Host 都支持相同 automation API。`host_surface` 未知时，应省略一次
 该参数并使用只读 selection Gate；不要把 Codex CLI、IDE plugin、App SSH 或普通 shell 猜成
-Codex App heartbeat。
+Codex App heartbeat。完整表面、启动方式、停止策略和验证证据以 Runtime Connector Catalog 与
+对应 Host 文档为准；Dev Book 不复制每个 adapter 的完整 runbook。
 
 ## 如何组合 Codex Goal 与 LoopX
 

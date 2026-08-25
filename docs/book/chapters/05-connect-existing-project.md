@@ -120,7 +120,8 @@ next_action: <one concrete next step>
 要求：
 
 - Python 3.11 或更高版本；
-- macOS 或 Linux shell；
+- Node.js 22.6 或更高版本，用于 LoopX 自动管理的 TypeScript Effect runtime；
+- macOS/Linux shell，或 Windows PowerShell 7；
 - 一个已有 Git 项目。
 
 安装 PyPI release 及其 LoopX workflow skills：
@@ -136,7 +137,19 @@ loopx doctor
     live canary 或贡献 Kernel 的开发者。
 
 `loopx doctor` 是安装事实的入口。不要只以 `which loopx` 成功作为健康证明；doctor 还会检查
-release snapshot、Python import、skill 安装和 Host 集成。
+release snapshot、Python import、skill 安装、Host 集成和 TypeScript Effect runtime。运行时由
+LoopX 自动启动并在空闲后退出，用户不需要手工维护 daemon；`stopped` 表示可按需重启的健康状态，
+`missing`、`unsupported` 或 `probe_failed` 则需要先修复。
+
+需要确认真实 runtime 与 journal checkpoint 时运行：
+
+```bash
+node --version
+loopx doctor --deep
+```
+
+原生 Windows 的完整安装、升级与回滚命令见
+[Installing LoopX](/loopx/docs/guides/installing-loopx/)；不要为了套用 POSIX 示例而要求 WSL。
 
 ## 3. 建立忽略规则
 

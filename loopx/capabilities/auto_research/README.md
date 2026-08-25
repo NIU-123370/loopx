@@ -65,6 +65,29 @@ one open question; auto-research supplies a fixed output contract; the generic
 kernel owns the runner, real Codex TUI panes, pane-local A2A tick, and
 todo/evidence/status protocol.
 
+When the run must end in a verifiable deliverable rather than only a research
+finding, the curator writes `auto_research_delivery_contract_v0`. The envelope
+keeps the original wish, assumptions, required artifacts, acceptance criteria,
+failure fallbacks, and reentry conditions together with the existing
+`research_contract_v0`. Evidence created from that file is bound to its
+atomic `wish_id`, `contract_ref`, and `contract_revision` lineage; partial or
+mismatched lineage is not eligible for verification.
+
+After terminal decisions and any required independent reviews exist, build the
+read-only delivery receipt:
+
+```bash
+loopx auto-research artifact-receipt \
+  --contract delivery-contract.public.json
+```
+
+The receipt distinguishes `verified`, `partial`, `inconclusive`,
+`not_fulfilled`, and `stale`. A single failed attempt is never enough for
+`not_fulfilled`; that state requires a terminal retirement decision and any
+independent review required by the delivery contract. Non-verified receipts
+return the unmet criteria, verified boundary, available fallback artifacts, and
+reentry conditions.
+
 The contract also includes the next one-command launch surface:
 
 ```bash

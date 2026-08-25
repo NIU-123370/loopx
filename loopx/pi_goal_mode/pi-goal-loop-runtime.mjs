@@ -32,7 +32,49 @@ import path from "node:path"
 export const BRIDGE_SCHEMA_VERSION = "loopx_pi_goal_bridge_v0"
 export const TERMINAL_STATE_SCHEMA_VERSION = "goal_terminal_state_v0"
 export const SOURCE_COMPLETENESS_SCHEMA_VERSION = "goal_terminal_source_completeness_v0"
+export const PI_SESSION_AUTHORITY_SCHEMA_VERSION = "loopx_pi_session_authority_v0"
+export const PI_ACTIVATION_SCHEMA_VERSION = "loopx_pi_goal_activation_v0"
 export const DEFAULT_RETRY_MINUTES = 3
+export const TASK_LEASE_CAPABILITY = "task_lease_v0"
+export const TASK_LEASE_SCHEMA_VERSION = "task_lease_v0"
+export const TASK_LEASE_ACTIONS = Object.freeze([
+  "acquire",
+  "renew",
+  "transfer",
+  "release",
+  "inspect",
+])
+
+const TASK_LEASE_MUTATIONS = new Set(["acquire", "renew", "transfer", "release"])
+const TASK_LEASE_MAX_TTL_SECONDS = 24 * 60 * 60
+const TASK_LEASE_TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/
+const TASK_LEASE_AGENT_ID_PATTERN = /^[a-z][a-z0-9_.:@-]{0,79}$/
+const TASK_LEASE_IDEMPOTENCY_PATTERN = /^[A-Za-z0-9_.:@/-]{1,160}$/
+const TASK_LEASE_ACTION_FIELDS = Object.freeze({
+  acquire: Object.freeze([
+    ["idempotencyKey", "--idempotency-key", "token", true],
+    ["ttlSeconds", "--ttl-seconds", "ttl", false],
+    ["expectedVersion", "--expected-version", "version", false],
+    ["writeScopes", "--write-scope", "scopes", false],
+  ]),
+  renew: Object.freeze([
+    ["idempotencyKey", "--idempotency-key", "token", true],
+    ["ttlSeconds", "--ttl-seconds", "ttl", false],
+    ["expectedVersion", "--expected-version", "version", true],
+  ]),
+  transfer: Object.freeze([
+    ["idempotencyKey", "--idempotency-key", "token", true],
+    ["newOwner", "--new-owner", "owner", true],
+    ["newIdempotencyKey", "--new-idempotency-key", "token", true],
+    ["ttlSeconds", "--ttl-seconds", "ttl", false],
+    ["expectedVersion", "--expected-version", "version", true],
+  ]),
+  release: Object.freeze([
+    ["idempotencyKey", "--idempotency-key", "token", true],
+    ["expectedVersion", "--expected-version", "version", true],
+  ]),
+  inspect: Object.freeze([]),
+})
 
 // The label prefix of a session key reserves room for the digest suffix so
 // that createBindingStore's filename sanitization (160 chars) can never cut
@@ -75,6 +117,7 @@ function bindingDefaults(directory) {
     agentId: "",
     registryPath: "",
     availableCapabilities: [],
+    activationToken: "",
     taskBody: "",
     autoResume: true,
     terminal: false,
@@ -83,6 +126,93 @@ function bindingDefaults(directory) {
     unchangedPolls: 0,
     lastInjectedPrompt: "",
   }
+}
+
+function typedError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+const authorityError = typedError
+const taskLeaseRequestError = typedError
+
+function normalizeAuthorityCapabilities(value) {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))].sort((left, right) =>
+    left.localeCompare(right),
+  )
+}
+
+export function normalizePiSessionAuthority(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw authorityError("authority_not_bound", "Pi session has no host-verified authority")
+  }
+  const token = String(value.token || "").trim()
+  const goalId = String(value.goalId || "").trim()
+  const agentId = String(value.agentId || "").trim()
+  const registryPath = String(value.registryPath || "").trim()
+  if (!token || !goalId || !agentId || !registryPath) {
+    throw authorityError(
+      "authority_not_bound",
+      "host-verified Pi authority must include token, goal, agent, and registry",
+    )
+  }
+  return {
+    schemaVersion: PI_SESSION_AUTHORITY_SCHEMA_VERSION,
+    token,
+    goalId,
+    agentId,
+    registryPath,
+    availableCapabilities: normalizeAuthorityCapabilities(value.availableCapabilities),
+  }
+}
+
+function sameAuthority(left, right) {
+  return left?.schemaVersion === right?.schemaVersion &&
+    left?.token === right?.token &&
+    left?.goalId === right?.goalId &&
+    left?.agentId === right?.agentId &&
+    left?.registryPath === right?.registryPath &&
+    JSON.stringify(left?.availableCapabilities || []) ===
+      JSON.stringify(right?.availableCapabilities || [])
+}
+
+function assertActivationAuthority(authority, fields) {
+  const normalized = normalizePiSessionAuthority(authority)
+  const suppliedToken = String(fields?.activationToken || "").trim()
+  if (!suppliedToken) {
+    throw authorityError(
+      "authority_token_required",
+      "loopx_goal_activate requires the host-issued session authority token",
+    )
+  }
+  if (suppliedToken !== normalized.token) {
+    throw authorityError("authority_mismatch", "Pi session authority token does not match")
+  }
+  const checks = [
+    ["goalId", fields?.goalId, normalized.goalId],
+    ["agentId", fields?.agentId, normalized.agentId],
+    ["registryPath", fields?.registryPath, normalized.registryPath],
+  ]
+  for (const [field, supplied, expected] of checks) {
+    if (supplied !== undefined && String(supplied || "").trim() !== expected) {
+      throw authorityError(
+        "authority_mismatch",
+        `${field} does not match the host-verified Pi session authority`,
+      )
+    }
+  }
+  if (fields?.availableCapabilities !== undefined) {
+    const supplied = normalizeAuthorityCapabilities(fields.availableCapabilities)
+    if (JSON.stringify(supplied) !== JSON.stringify(normalized.availableCapabilities)) {
+      throw authorityError(
+        "capability_not_verified",
+        "availableCapabilities must match the host-verified Pi session authority",
+      )
+    }
+  }
+  return normalized
 }
 
 function casMatches(current, expected) {
@@ -241,6 +371,311 @@ export function buildQuotaArgs(binding) {
   return args
 }
 
+function taskLeaseFailure(action, errorCode, message) {
+  return {
+    ok: false,
+    schema_version: TASK_LEASE_SCHEMA_VERSION,
+    action: action || null,
+    error: message,
+    error_code: errorCode,
+  }
+}
+
+function nonEmptyTaskLeaseString(value, field) {
+  const normalized = String(value ?? "").trim()
+  if (!normalized) {
+    throw taskLeaseRequestError("invalid_request", `${field} is required`)
+  }
+  return normalized
+}
+
+function taskLeaseFormString(value, field, pattern, description) {
+  const normalized = nonEmptyTaskLeaseString(value, field)
+  if (!pattern.test(normalized)) {
+    throw taskLeaseRequestError("invalid_request", `${field} must be ${description}`)
+  }
+  return normalized
+}
+
+function taskLeaseGoalId(value, field = "goalId") {
+  const normalized = nonEmptyTaskLeaseString(value, field)
+  if (normalized === "." || normalized === ".." || /[\\/]/.test(normalized)) {
+    throw taskLeaseRequestError("invalid_request", `${field} must be a single path segment`)
+  }
+  return normalized
+}
+
+function taskLeaseTodoId(value, field = "todoId") {
+  return taskLeaseFormString(value, field, TASK_LEASE_TODO_ID_PATTERN, "a todo_<token> id")
+}
+
+function taskLeaseOwner(value, field = "agentId") {
+  return taskLeaseFormString(value, field, TASK_LEASE_AGENT_ID_PATTERN, "a public-safe agent id")
+}
+
+function taskLeaseIdempotencyKey(value, field) {
+  return taskLeaseFormString(value, field, TASK_LEASE_IDEMPOTENCY_PATTERN, "a public-safe token")
+}
+
+function taskLeaseWriteScope(value, field) {
+  const normalized = nonEmptyTaskLeaseString(value, field)
+  if (
+    normalized.length > 160 ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("~") ||
+    normalized.split("/").includes("..") ||
+    /[\s<>]/.test(normalized)
+  ) {
+    throw taskLeaseRequestError("invalid_request", `${field} must be a relative write scope`)
+  }
+  return normalized
+}
+
+function assertTaskLeaseInteger(value, field, { minimum = 0, maximum } = {}) {
+  if (
+    !Number.isInteger(value) ||
+    value < minimum ||
+    (maximum !== undefined && value > maximum)
+  ) {
+    const range = maximum === undefined ? `>= ${minimum}` : `between ${minimum} and ${maximum}`
+    throw taskLeaseRequestError("invalid_request", `${field} must be an integer ${range}`)
+  }
+  return value
+}
+
+function taskLeaseBindingAuthority(binding, action, verifiedAuthority) {
+  if (!binding || typeof binding !== "object") {
+    throw taskLeaseRequestError("missing_goal_binding", "Pi session has no active LoopX goal binding")
+  }
+  if (verifiedAuthority !== undefined) {
+    const authority = normalizePiSessionAuthority(verifiedAuthority)
+    const bindingCapabilities = normalizeAuthorityCapabilities(binding.availableCapabilities)
+    if (
+      String(binding.activationToken || "") !== authority.token ||
+      String(binding.goalId || "") !== authority.goalId ||
+      String(binding.agentId || "") !== authority.agentId ||
+      String(binding.registryPath || "") !== authority.registryPath ||
+      JSON.stringify(bindingCapabilities) !== JSON.stringify(authority.availableCapabilities)
+    ) {
+      throw taskLeaseRequestError(
+        "authority_mismatch",
+        "Pi session binding does not match the host-verified authority",
+      )
+    }
+  }
+  const goalId = taskLeaseGoalId(binding.goalId)
+  const fields = TASK_LEASE_ACTION_FIELDS[action]
+  if (!fields) {
+    throw taskLeaseRequestError(
+      "unsupported_action",
+      `task lease action must be one of: ${TASK_LEASE_ACTIONS.join(", ")}`,
+    )
+  }
+  if (!TASK_LEASE_MUTATIONS.has(action)) return { goalId, owner: "", fields }
+  if (binding.terminal === true) {
+    throw taskLeaseRequestError("inactive_goal_binding", "Pi session goal binding is terminal")
+  }
+  const owner = taskLeaseOwner(binding.agentId)
+  const capabilities = Array.isArray(binding.availableCapabilities)
+    ? binding.availableCapabilities
+    : []
+  if (!capabilities.includes(TASK_LEASE_CAPABILITY)) {
+    throw taskLeaseRequestError(
+      "capability_not_advertised",
+      `Pi must explicitly advertise ${TASK_LEASE_CAPABILITY} before ${action}`,
+    )
+  }
+  return { goalId, owner, fields }
+}
+
+function taskLeaseFieldValues(request, field, kind, required) {
+  const value = request[field]
+  if (value === undefined) {
+    if (required) throw taskLeaseRequestError("invalid_request", `${field} is required`)
+    return []
+  }
+  if (kind === "string") return [nonEmptyTaskLeaseString(value, field)]
+  if (kind === "token") return [taskLeaseIdempotencyKey(value, field)]
+  if (kind === "owner") return [taskLeaseOwner(value, field)]
+  if (kind === "version") return [String(assertTaskLeaseInteger(value, field))]
+  if (kind === "ttl") {
+    return [
+      String(
+        assertTaskLeaseInteger(value, field, {
+          minimum: 1,
+          maximum: TASK_LEASE_MAX_TTL_SECONDS,
+        }),
+      ),
+    ]
+  }
+  if (!Array.isArray(value)) {
+    throw taskLeaseRequestError("invalid_request", `${field} must be an array`)
+  }
+  return value.map((item) => taskLeaseWriteScope(item, `${field} entry`))
+}
+
+// Build the exact CLI argv used by the installed Pi extension. Goal and owner
+// authority come from the active session binding; request fields are only the
+// lifecycle inputs the agent is allowed to choose.
+export function buildTaskLeaseArgs(binding, request, verifiedAuthority) {
+  request = request ?? {}
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw taskLeaseRequestError("invalid_request", "task lease request must be an object")
+  }
+  const action = String(request.action || "").trim()
+  const { goalId, owner, fields } = taskLeaseBindingAuthority(binding, action, verifiedAuthority)
+  for (const field of ["goalId", "owner"]) {
+    if (request[field] !== undefined) {
+      throw taskLeaseRequestError(
+        "authority_mismatch",
+        `${field} is supplied by the active Pi session binding`,
+      )
+    }
+  }
+  const allowed = new Set(["action", "todoId", ...fields.map(([field]) => field)])
+  const unsupported = Object.keys(request).filter(
+    (field) => request[field] !== undefined && !allowed.has(field),
+  )
+  if (unsupported.length) {
+    throw taskLeaseRequestError(
+      "invalid_request",
+      `${action || "task lease"} does not accept: ${unsupported.join(", ")}`,
+    )
+  }
+  const todoId = taskLeaseTodoId(request.todoId)
+  const args = []
+  if (binding.registryPath) args.push("--registry", String(binding.registryPath))
+  args.push(
+    "--format",
+    "json",
+    "task-lease",
+    action,
+    "--goal-id",
+    goalId,
+    "--todo-id",
+    todoId,
+  )
+  if (TASK_LEASE_MUTATIONS.has(action)) args.push("--owner", owner)
+  for (const [field, flag, kind, required] of fields) {
+    for (const value of taskLeaseFieldValues(request, field, kind, required)) {
+      args.push(flag, value)
+    }
+  }
+  return args
+}
+
+function parseTaskLeaseCliPayload(stdout) {
+  const text = String(stdout || "").trim()
+  if (!text) return null
+  try {
+    const payload = JSON.parse(text)
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      payload.schema_version !== TASK_LEASE_SCHEMA_VERSION
+    ) return null
+    return payload
+  } catch {
+    return null
+  }
+}
+
+function validTaskLeaseCliPayload(payload, action, returncode) {
+  if (!payload || payload.action !== action || typeof payload.ok !== "boolean") return false
+  if (payload.ok === false &&
+      (typeof payload.error !== "string" || !payload.error.trim() ||
+       typeof payload.error_code !== "string" || !payload.error_code.trim())) return false
+  if (Number.isInteger(returncode)) {
+    if (payload.ok === true && returncode !== 0) return false
+    if (payload.ok === false && returncode === 0) return false
+  }
+  return true
+}
+
+function compactTaskLeasePayload(payload) {
+  const privatePaths = new Set()
+  const collect = (value) => {
+    if (Array.isArray(value)) value.forEach(collect)
+    else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        if (key === "lease_path" && typeof child === "string" && child) privatePaths.add(child)
+        collect(child)
+      }
+    }
+  }
+  collect(payload)
+  const compact = (value) => {
+    if (typeof value === "string") {
+      let text = value
+      for (const privatePath of privatePaths) text = text.split(privatePath).join("<private-path>")
+      return text
+    }
+    if (Array.isArray(value)) return value.map(compact)
+    if (!value || typeof value !== "object") return value
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => key !== "lease_path")
+        .map(([key, child]) => [key, compact(child)]),
+    )
+  }
+  return compact(payload)
+}
+
+// Execute a task-lease request through an injected CLI transport. A typed
+// non-zero payload is authoritative and survives process rejection; malformed
+// or empty output fails closed without exposing stderr or raw host details.
+function cliReturncode(error) {
+  if (typeof error?.returncode === "number") return error.returncode
+  if (typeof error?.code === "number") return error.code
+  return 1
+}
+
+export async function runPiTaskLease(binding, request, runCli, verifiedAuthority) {
+  request = request ?? {}
+  const action = String(request?.action || "").trim() || null
+  if (verifiedAuthority === undefined) {
+    return taskLeaseFailure(
+      action,
+      "authority_not_bound",
+      "Pi session has no current host-verified authority",
+    )
+  }
+  let args
+  try {
+    args = buildTaskLeaseArgs(binding, request, verifiedAuthority)
+  } catch (error) {
+    return taskLeaseFailure(
+      action,
+      String(error?.code || "invalid_request"),
+      String(error?.message || "invalid task lease request"),
+    )
+  }
+  if (typeof runCli !== "function") {
+    return taskLeaseFailure(action, "transport_error", "task lease CLI transport is unavailable")
+  }
+  let result
+  try {
+    result = await runCli(args, String(binding.directory || ""))
+  } catch (error) {
+    result = {
+      stdout: error?.stdout,
+      returncode: cliReturncode(error),
+    }
+  }
+  const stdout = typeof result === "string" ? result : result?.stdout
+  const returncode = typeof result === "string" ? undefined : result?.returncode
+  const payload = parseTaskLeaseCliPayload(stdout)
+  if (validTaskLeaseCliPayload(payload, action, returncode)) return compactTaskLeasePayload(payload)
+  return taskLeaseFailure(
+    action,
+    String(stdout || "").trim() ? "protocol_error" : "transport_error",
+    String(stdout || "").trim()
+      ? "task lease CLI returned an invalid typed payload"
+      : "task lease CLI returned no typed payload",
+  )
+}
+
 export function isTerminalNoFollowup(decision) {
   const frontier = decision?.goal_frontier_projection
   const terminal = frontier?.terminal_state
@@ -325,6 +760,7 @@ export function createGoalLoop(options) {
   const timers = new Map()
   const evaluations = new Map()
   const contexts = new Map()
+  const authorities = new Map()
   let disposed = false
   let epoch = 0
 
@@ -504,7 +940,32 @@ export function createGoalLoop(options) {
     // using the freshest context available. The adapter must pass one stable
     // store instance per key so the store's per-key commit queue is shared.
     bind(key, services) {
+      if (services?.authority !== undefined) {
+        const authority = normalizePiSessionAuthority(services.authority)
+        const current = authorities.get(key)
+        if (current && !sameAuthority(current, authority)) {
+          throw authorityError(
+            "authority_mismatch",
+            "Pi session authority cannot change after host binding",
+          )
+        }
+        authorities.set(key, authority)
+      }
       contexts.set(key, services)
+    },
+    // Host-only seam: the Pi adapter calls this after it receives a verified
+    // startup/session packet. Model-callable tools never receive this method.
+    bindAuthority(key, authority) {
+      const normalized = normalizePiSessionAuthority(authority)
+      const current = authorities.get(key)
+      if (current && !sameAuthority(current, normalized)) {
+        throw authorityError(
+          "authority_mismatch",
+          "Pi session authority cannot change after host binding",
+        )
+      }
+      authorities.set(key, normalized)
+      return normalized
     },
     cancel(key) {
       cancelScheduled(key)
@@ -513,11 +974,24 @@ export function createGoalLoop(options) {
       if (disposed) return null
       const services = contexts.get(key)
       if (!services) throw new Error("loopx_goal_activate requires a bound session context")
+      const authority = authorities.get(key) || services.authority
+      const verified = assertActivationAuthority(authority, fields)
       // Increment the persisted generation so every in-flight evaluation for
       // this key is rejected at its next compare-and-swap commit.
       const current = await services.store.read(key)
       const generation = (current?.generation || 0) + 1
-      const binding = await services.store.write(key, { ...fields, generation })
+      const binding = await services.store.write(key, {
+        ...fields,
+        activationToken: verified.token,
+        goalId: verified.goalId,
+        agentId: verified.agentId,
+        registryPath: verified.registryPath,
+        availableCapabilities: verified.availableCapabilities,
+        generation,
+      })
+      if (!binding) {
+        throw authorityError("authority_mismatch", "Pi session binding changed during activation")
+      }
       if (disposed) return null
       cancelScheduled(key)
       services.notify(
