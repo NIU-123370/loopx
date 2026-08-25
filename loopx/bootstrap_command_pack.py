@@ -18,6 +18,9 @@ from .control_plane.goals.start_contract import (
     build_goal_start_contract,
     build_goal_start_prompt,
 )
+from .control_plane.goals.existing_agent_frontier import (
+    existing_runnable_todo_for_agent,
+)
 from .control_plane.scheduler.execution_context import (
     GUIDED_START_TURN_RUNTIME_PROFILES,
 )
@@ -646,54 +649,6 @@ def _bootstrap_command(
 
 def _project_command(project: str, command: str) -> str:
     return "\n".join([f"cd {shell_arg(project)}", command])
-
-
-def existing_runnable_todo_for_agent(
-    *,
-    project: Path,
-    goal: dict[str, Any],
-    state_file: str,
-    agent_id: str | None,
-) -> dict[str, Any] | None:
-    """Return one open, unblocked agent todo claimed by agent_id, if any.
-
-    A guided existing-agent takeover should continue the agent's runnable
-    frontier instead of unconditionally authoring new todos. This inspects the
-    durable active-state todo board and returns the first open, unblocked todo
-    claimed by the resolved agent, or None when the agent has no runnable work
-    to continue (fresh goal, all todos done, or the frontier is blocked).
-    """
-    if not agent_id:
-        return None
-    state_path = Path(state_file)
-    if not state_path.is_absolute():
-        state_path = project / state_path
-    if not state_path.exists():
-        return None
-    try:
-        state_text = state_path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    from .control_plane.todos.active_state_todo_parser import (
-        parse_active_state_todos,
-    )
-    from .control_plane.todos.contract import normalize_todo_claimed_by
-
-    parsed = parse_active_state_todos(state_text, goal=goal)
-    agent_todos = parsed.get("agent_todos")
-    if not isinstance(agent_todos, dict):
-        return None
-    for item in agent_todos.get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        if item.get("done"):
-            continue
-        if normalize_todo_claimed_by(item.get("claimed_by")) != agent_id:
-            continue
-        if item.get("blocking"):
-            continue
-        return item
-    return None
 
 
 def _goal_start_bootstrap_command(
