@@ -19,6 +19,7 @@ from .control_plane.goals.start_contract import (
     build_goal_start_prompt,
 )
 from .control_plane.goals.existing_agent_frontier import (
+    build_goal_todo_frontier_steps,
     existing_runnable_todo_for_agent,
 )
 from .control_plane.scheduler.execution_context import (
@@ -1546,59 +1547,11 @@ def build_start_goal_guided_packet(
             },
             *bind_thread_steps,
             *fine_mode_steps,
-            *(
-                [
-                    {
-                        "id": "continue_existing_frontier",
-                        "kind": "conditional_mutation",
-                        "todo_delta": str(command_pack.get("todo_delta") or "add_new"),
-                        "decision": "reuse_existing",
-                        "existing_todo_id": command_pack.get("existing_runnable_todo_id"),
-                        "purpose": (
-                            "the resolved agent already owns an open, unblocked "
-                            "advancement todo; continue that frontier instead of "
-                            "authoring a duplicate todo"
-                        ),
-                    }
-                ]
-                if str(command_pack.get("todo_delta") or "add_new") == "reuse_existing"
-                else [
-                    {
-                        "id": "plan_ranked_todos",
-                        "kind": "model_checkpoint",
-                        "prompt": commands.get("goal_start_plan_prompt"),
-                        "purpose": (
-                            "produce one public-safe, small, verifiable checkpoint Todo; keep "
-                            "later options as evidence-linked planning notes"
-                            if fine_grained
-                            else "produce concise public-safe P0/P1/P2 todos before todo writeback"
-                        ),
-                    },
-                    {
-                        "id": "write_ordered_todos",
-                        "kind": "operator_or_agent_actions",
-                        "command_template": (
-                            f"{shell_arg(cli_bin)} todo add --goal-id "
-                            f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
-                            "--project . "
-                            "--role agent "
-                            + (
-                                f"--claimed-by {shell_arg(str(command_pack.get('agent_id') or ''))} "
-                                if command_pack.get("agent_id")
-                                else "--claimed-by <agent-id> "
-                            )
-                            + "--task-class advancement_task --action-kind <action_kind> "
-                            "[--target-key <target_key>] --text '<[P0/P1/P2] ...>'"
-                        ),
-                        "purpose": (
-                            "write only the current checkpoint Todo; the existing replan path "
-                            "qualifies any successor after completion evidence"
-                            if fine_grained
-                            else "write todos in planner order; capability successors preserve "
-                            "the admitted action_kind and target_key for later quota re-entry"
-                        ),
-                    },
-                ]
+            *build_goal_todo_frontier_steps(
+                command_pack=command_pack,
+                commands=commands,
+                cli_bin=cli_bin,
+                fine_grained=fine_grained,
             ),
             {
                 "id": "refresh_state",
