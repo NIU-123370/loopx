@@ -878,6 +878,10 @@ def test_start_goal_guided_reuses_existing_agent_runnable_frontier() -> None:
             if step["id"] == "continue_existing_frontier"
         )
         assert frontier_step.get("decision") == "reuse_existing"
+        escape_template = str(frontier_step.get("add_new_command_template") or "")
+        assert " todo add " in escape_template, escape_template
+        assert "todo_existing_frontier" not in escape_template, escape_template
+        assert frontier_step.get("add_new_escape_hatch"), frontier_step
 
         fresh = run_json(
             "start-goal",
@@ -900,6 +904,108 @@ def test_start_goal_guided_reuses_existing_agent_runnable_frontier() -> None:
         assert "continue_existing_frontier" not in fresh_step_ids, fresh_step_ids
 
 
+def _write_reuse_frontier_project(project: Path, agent_todo_section: str) -> None:
+    project.mkdir(parents=True)
+    state_file = project / ".codex" / "goals" / "reuse-goal" / "ACTIVE_GOAL_STATE.md"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(
+        "# Active Goal State\n\n## Agent Todo\n\n" + agent_todo_section,
+        encoding="utf-8",
+    )
+    registry = project / ".loopx" / "registry.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "reuse-goal",
+                        "status": "active",
+                        "repo": str(project),
+                        "state_file": str(state_file.relative_to(project)),
+                        "coordination": {
+                            "agent_model": "peer_v1",
+                            "registered_agents": ["existing-agent"],
+                        },
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _run_guided_takeover(project: Path, agent_id: str) -> dict[str, object]:
+    return run_json(
+        "start-goal",
+        "--guided",
+        "--project",
+        str(project),
+        "--goal-id",
+        "reuse-goal",
+        "--agent-id",
+        agent_id,
+        "--host-surface",
+        "codex-app-ssh",
+        "--goal-text",
+        "take over the existing agent and continue its current work",
+    )
+
+
+def test_start_goal_guided_skips_blocked_agent_frontier() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "blocked-frontier-project"
+        _write_reuse_frontier_project(
+            project,
+            "- [ ] Wait on the upstream quota window before continuing\n"
+            "  <!-- loopx:todo todo_id=todo_blocked_frontier role=agent status=blocked "
+            "priority=P1 task_class=advancement_task claimed_by=existing-agent "
+            "action_kind=repair target_key=quota-window -->\n",
+        )
+
+        blocked = _run_guided_takeover(project, "existing-agent")
+        assert blocked["command_pack"].get("todo_delta") == "add_new"
+        assert blocked["command_pack"].get("existing_runnable_todo_id") is None
+        blocked_step_ids = [
+            step["id"] for step in blocked["guided_transaction"]["ordered_steps"]
+        ]
+        assert "continue_existing_frontier" not in blocked_step_ids, blocked_step_ids
+        assert "plan_ranked_todos" in blocked_step_ids, blocked_step_ids
+        assert "write_ordered_todos" in blocked_step_ids, blocked_step_ids
+
+
+def test_start_goal_guided_reuse_scans_beyond_default_item_cap() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "capped-frontier-project"
+        filler_todos = "".join(
+            f"- [ ] Filler open todo {index} owned by another lane\n"
+            "  <!-- loopx:todo "
+            f"todo_id=todo_filler_{index} role=agent status=open "
+            "priority=P2 task_class=advancement_task claimed_by=other-agent "
+            "action_kind=analyze -->\n"
+            for index in range(1, 14)
+        )
+        _write_reuse_frontier_project(
+            project,
+            filler_todos
+            + "- [ ] Continue the frontier beyond the status todo cap\n"
+            "  <!-- loopx:todo todo_id=todo_deep_frontier role=agent status=open "
+            "priority=P1 task_class=advancement_task claimed_by=existing-agent "
+            "action_kind=implement target_key=deep-frontier -->\n",
+        )
+
+        deep = _run_guided_takeover(project, "existing-agent")
+        assert deep["command_pack"].get("todo_delta") == "reuse_existing"
+        assert deep["command_pack"].get("existing_runnable_todo_id") == "todo_deep_frontier"
+        deep_step_ids = [
+            step["id"] for step in deep["guided_transaction"]["ordered_steps"]
+        ]
+        assert "continue_existing_frontier" in deep_step_ids, deep_step_ids
+
+
 def main() -> int:
     test_missing_project_stops_before_mutation()
     test_goal_text_invocation_plans_ranked_todos_before_activation()
@@ -910,6 +1016,8 @@ def main() -> int:
     test_skill_slash_fallback_contract()
     test_start_goal_guided_derives_display_name_from_goal_text()
     test_start_goal_guided_reuses_existing_agent_runnable_frontier()
+    test_start_goal_guided_skips_blocked_agent_frontier()
+    test_start_goal_guided_reuse_scans_beyond_default_item_cap()
     print("bootstrap command pack smoke passed")
     return 0
 

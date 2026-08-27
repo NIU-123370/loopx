@@ -5,7 +5,11 @@ from typing import Any
 
 from ...project_prompt import shell_arg
 from ..todos.active_state_todo_parser import parse_active_state_todos
-from ..todos.contract import normalize_todo_claimed_by
+from ..todos.contract import (
+    TODO_STATUS_BLOCKED,
+    normalize_todo_claimed_by,
+    normalize_todo_status,
+)
 
 
 def existing_runnable_todo_for_agent(
@@ -28,12 +32,14 @@ def existing_runnable_todo_for_agent(
     except OSError:
         return None
 
-    parsed = parse_active_state_todos(state_text, goal=goal)
+    parsed = parse_active_state_todos(state_text, goal=goal, item_limit=None)
     agent_todos = parsed.get("agent_todos")
     if not isinstance(agent_todos, dict):
         return None
     for item in agent_todos.get("items") or []:
-        if not isinstance(item, dict) or item.get("done") or item.get("blocking"):
+        if not isinstance(item, dict) or item.get("done"):
+            continue
+        if normalize_todo_status(item.get("status")) == TODO_STATUS_BLOCKED:
             continue
         if normalize_todo_claimed_by(item.get("claimed_by")) == agent_id:
             return item
@@ -49,6 +55,19 @@ def build_goal_todo_frontier_steps(
 ) -> list[dict[str, Any]]:
     """Project guided steps that either reuse or create the agent frontier."""
     todo_delta = str(command_pack.get("todo_delta") or "add_new")
+    claimed_by = (
+        f"--claimed-by {shell_arg(str(command_pack.get('agent_id') or ''))} "
+        if command_pack.get("agent_id")
+        else "--claimed-by <agent-id> "
+    )
+    add_new_command_template = (
+        f"{shell_arg(cli_bin)} todo add --goal-id "
+        f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
+        "--project . --role agent "
+        f"{claimed_by}"
+        "--task-class advancement_task --action-kind <action_kind> "
+        "[--target-key <target_key>] --text '<[P0/P1/P2] ...>'"
+    )
     if todo_delta == "reuse_existing":
         return [
             {
@@ -62,14 +81,17 @@ def build_goal_todo_frontier_steps(
                     "advancement todo; continue that frontier instead of "
                     "authoring a duplicate todo"
                 ),
+                "add_new_command_template": add_new_command_template,
+                "add_new_escape_hatch": (
+                    "bounded fallback only: if the frontier todo is already "
+                    "terminal or no longer covers the requested continuation "
+                    "when the step executes, author one replacement advancement "
+                    "todo with add_new_command_template instead of continuing "
+                    "the stale frontier"
+                ),
             }
         ]
 
-    claimed_by = (
-        f"--claimed-by {shell_arg(str(command_pack.get('agent_id') or ''))} "
-        if command_pack.get("agent_id")
-        else "--claimed-by <agent-id> "
-    )
     return [
         {
             "id": "plan_ranked_todos",
@@ -85,14 +107,7 @@ def build_goal_todo_frontier_steps(
         {
             "id": "write_ordered_todos",
             "kind": "operator_or_agent_actions",
-            "command_template": (
-                f"{shell_arg(cli_bin)} todo add --goal-id "
-                f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
-                "--project . --role agent "
-                f"{claimed_by}"
-                "--task-class advancement_task --action-kind <action_kind> "
-                "[--target-key <target_key>] --text '<[P0/P1/P2] ...>'"
-            ),
+            "command_template": add_new_command_template,
             "purpose": (
                 "write only the current checkpoint Todo; the existing replan path "
                 "qualifies any successor after completion evidence"
