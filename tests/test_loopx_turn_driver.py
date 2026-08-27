@@ -1030,7 +1030,7 @@ def test_turn_cli_binds_advisory_primary_without_hiding_portfolio(
         "turn_controller_advisory_primary"
     )
     portfolio = envelope["action"]["action_portfolio"]
-    assert portfolio["schema_version"] == "quota_action_portfolio_v1"
+    assert portfolio["schema_version"] == "quota_action_portfolio_v2"
     assert portfolio["primary"]["todo_id"] == "todo_fixture0001"
     assert portfolio["selection_policy"]["requires_explicit_turn_binding"] is True
     assert envelope["writeback"].get("selection_required") is None

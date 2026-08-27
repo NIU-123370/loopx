@@ -946,6 +946,14 @@ still user-held or ambiguous, IP-004 / IP-003 owns the user-facing ask. If no
 ready deferred item exists, IP-026 may classify the scoped frontier as
 `scope_exhausted`, `agent_scope_wait`, or `reassignment_required`.
 
+An unrelated `user_action` is only a dual-channel notice in this state. It may
+set `user_channel.notify=NOTIFY` and `user_channel.non_blocking=true`, but the
+agent channel must remain `must_attempt=true`, `delivery_allowed=false`, and
+`quiet_noop_allowed=false`; the lifecycle CLI action and active scheduler
+cadence remain authoritative. Empty-open-backlog detection must count this
+selected control-plane obligation as agent work instead of promoting the
+notice into `notify,wait`.
+
 **Visual Model**
 
 ```mermaid
@@ -972,6 +980,9 @@ step, so stale or future work outranks live open tasks.
 
 - `examples/control_plane/work-lane-contract-smoke.py` covers a ready deferred successor
   returning `successor_replan_required` instead of a quiet no-op.
+- `examples/control_plane/quota-resume-gated-open-todo-smoke.py` covers the
+  same required successor replan while an unrelated non-blocking user action
+  remains visible.
 - `examples/control_plane/todo-durability-fixture-smoke.py` covers parsing
   `resume_when=todo_done:<todo_id>` and projecting ready deferred candidates
   after open items.

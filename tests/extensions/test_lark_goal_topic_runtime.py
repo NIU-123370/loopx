@@ -91,7 +91,22 @@ def _reply_runner(state: dict[str, Any]):
             payload = {"data": {"chat_id": "oc_public_fixture"}}
         elif "+messages-reply" in args:
             state["reply_text"] = args[args.index("--text") + 1]
-            payload = {"data": {"message_id": "om_reply_fixture"}}
+            payload = (
+                {
+                    "api": [
+                        {
+                            "body": {
+                                "content": json.dumps(
+                                    {"text": state["reply_text"]},
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                }
+                if "--dry-run" in args
+                else {"data": {"message_id": "om_reply_fixture"}}
+            )
         elif "+messages-mget" in args:
             payload = {
                 "data": {
@@ -163,9 +178,7 @@ def test_mention_uses_existing_inbox_reply_and_ack_path(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert result["status"] == "replied_and_acknowledged"
     assert result["goal_id"] == "goal-alpha"
-    assert answers == [
-        ("goal-alpha", "@linkmacbot 你现在 loopx 的版本是什么")
-    ]
+    assert answers == [("goal-alpha", "@linkmacbot 你现在 loopx 的版本是什么")]
     assert state["reply_text"] == "当前运行的是 LoopX 开发版。"
     reply_call = next(call for call in state["calls"] if "+messages-reply" in call)
     assert reply_call[:3] == ["lark-cli", "--profile", "mew"]
@@ -505,7 +518,9 @@ def test_bound_topic_reuses_one_goal_chat_session(tmp_path: Path) -> None:
     assert "只生成预览" in runtime.submit_calls[0]["message"]
 
 
-def test_runtime_service_uses_one_consumer_for_reused_app_profile(tmp_path: Path) -> None:
+def test_runtime_service_uses_one_consumer_for_reused_app_profile(
+    tmp_path: Path,
+) -> None:
     from loopx.extensions.lark.goal_topic_runtime import LarkGoalTopicRuntimeService
 
     started = threading.Event()
@@ -539,7 +554,10 @@ def test_runtime_service_uses_one_consumer_for_reused_app_profile(tmp_path: Path
                     "enabled": True,
                     "target_ref": "mew-product",
                     "topic": {"root_message_id": f"om_{goal_id}"},
-                    "routing": {"incoming_mode": "mentions", "reply_mode": "topic_reply"},
+                    "routing": {
+                        "incoming_mode": "mentions",
+                        "reply_mode": "topic_reply",
+                    },
                 }
             },
         }
@@ -706,7 +724,9 @@ def test_runtime_service_records_safe_failure_code_for_listener_exception(
     service.close()
 
 
-def test_profile_stream_keeps_one_consumer_open_between_messages(tmp_path: Path) -> None:
+def test_profile_stream_keeps_one_consumer_open_between_messages(
+    tmp_path: Path,
+) -> None:
     from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
 
     captured: dict[str, Any] = {}
@@ -786,7 +806,9 @@ def test_profile_stream_keeps_one_consumer_open_between_messages(tmp_path: Path)
     }
 
 
-def test_profile_poll_routes_provider_event_through_existing_reply_path(tmp_path: Path) -> None:
+def test_profile_poll_routes_provider_event_through_existing_reply_path(
+    tmp_path: Path,
+) -> None:
     from loopx.extensions.lark.goal_topic_runtime import (
         poll_lark_goal_topic_profile_once,
     )
@@ -820,7 +842,10 @@ def test_profile_poll_routes_provider_event_through_existing_reply_path(tmp_path
                     "enabled": True,
                     "target_ref": "mew-product",
                     "topic": {"root_message_id": "om_topic_alpha"},
-                    "routing": {"incoming_mode": "mentions", "reply_mode": "topic_reply"},
+                    "routing": {
+                        "incoming_mode": "mentions",
+                        "reply_mode": "topic_reply",
+                    },
                 }
             },
         }
@@ -847,7 +872,9 @@ def test_profile_poll_routes_provider_event_through_existing_reply_path(tmp_path
         state["consume_args"] = list(args)
         return {"returncode": 0, "stdout": json.dumps(event) + "\n", "stderr": ""}
 
-    def provider_runner(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def provider_runner(
+        args: list[str], **_kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
         raise AssertionError(f"event routing must not query message history: {args}")
 
     result = poll_lark_goal_topic_profile_once(
@@ -1006,7 +1033,10 @@ def test_profile_poll_routes_the_only_goal_in_a_chat_without_querying_message_hi
                         "enabled": True,
                         "target_ref": "mew-product",
                         "topic": {"root_message_id": "om_topic_alpha"},
-                        "routing": {"incoming_mode": "all", "reply_mode": "topic_reply"},
+                        "routing": {
+                            "incoming_mode": "all",
+                            "reply_mode": "topic_reply",
+                        },
                     }
                 },
             }
@@ -1019,7 +1049,9 @@ def test_profile_poll_routes_the_only_goal_in_a_chat_without_querying_message_hi
         "content": "hello",
     }
 
-    def provider_runner(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def provider_runner(
+        args: list[str], **_kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
         raise AssertionError(f"event routing must not query message history: {args}")
 
     result = poll_lark_goal_topic_profile_once(
@@ -1077,7 +1109,10 @@ def test_profile_poll_reports_ambiguous_topic_context_without_querying_message_h
                     "enabled": True,
                     "target_ref": "mew-product",
                     "topic": {"root_message_id": topic_root},
-                    "routing": {"incoming_mode": "mentions", "reply_mode": "topic_reply"},
+                    "routing": {
+                        "incoming_mode": "mentions",
+                        "reply_mode": "topic_reply",
+                    },
                 }
             },
         }
@@ -1088,7 +1123,9 @@ def test_profile_poll_reports_ambiguous_topic_context_without_querying_message_h
         "content": "hello",
     }
 
-    def provider_runner(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def provider_runner(
+        args: list[str], **_kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
         raise AssertionError(f"event routing must not query message history: {args}")
 
     result = poll_lark_goal_topic_profile_once(
@@ -1108,7 +1145,9 @@ def test_profile_poll_reports_ambiguous_topic_context_without_querying_message_h
             "stderr": "",
         },
         provider_runner=provider_runner,
-        reply_runner=lambda _args: (_ for _ in ()).throw(AssertionError("must not reply")),
+        reply_runner=lambda _args: (_ for _ in ()).throw(
+            AssertionError("must not reply")
+        ),
     )
 
     assert result["event_count"] == 1
@@ -1147,7 +1186,10 @@ def test_profile_poll_does_not_reply_or_invoke_agent_when_message_mentions_other
                     "enabled": True,
                     "target_ref": "mew-product",
                     "topic": {"root_message_id": "om_topic_alpha"},
-                    "routing": {"incoming_mode": "mentions", "reply_mode": "topic_reply"},
+                    "routing": {
+                        "incoming_mode": "mentions",
+                        "reply_mode": "topic_reply",
+                    },
                 }
             },
         }
@@ -1187,7 +1229,9 @@ def test_profile_poll_does_not_reply_or_invoke_agent_when_message_mentions_other
             "stderr": "",
         },
         provider_runner=lambda _args: subprocess.CompletedProcess([], 0, "", ""),
-        reply_runner=lambda _args: (_ for _ in ()).throw(AssertionError("must not reply")),
+        reply_runner=lambda _args: (_ for _ in ()).throw(
+            AssertionError("must not reply")
+        ),
     )
 
     assert result_other["event_count"] == 1
@@ -1222,7 +1266,9 @@ def test_profile_poll_does_not_reply_or_invoke_agent_when_message_mentions_other
             "stderr": "",
         },
         provider_runner=lambda _args: subprocess.CompletedProcess([], 0, "", ""),
-        reply_runner=lambda _args: (_ for _ in ()).throw(AssertionError("must not reply")),
+        reply_runner=lambda _args: (_ for _ in ()).throw(
+            AssertionError("must not reply")
+        ),
     )
 
     assert result_all["event_count"] == 1

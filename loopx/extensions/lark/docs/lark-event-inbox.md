@@ -11,6 +11,7 @@ Lark event stream
   -> loopx lark-inbox processing (optional reaction lifecycle)
   -> domain agent writes a todo, vision correction, artifact update, or rationale
   -> direct bot question: loopx lark-inbox reply (optional, configured sender only)
+  -> unaddressed material: loopx lark-inbox material-review (effect/no-follow-up)
   -> loopx lark-inbox ack --message-id ... --execute
 ```
 
@@ -29,6 +30,82 @@ current message and its direct parent, then marks it actionable only when the
 parent sender is the app id of the configured profile. A reply to a person,
 another app, or an unverifiable parent remains captured but does not wake the
 agent. The agent does not need to keep a websocket open.
+
+### Optional turn-start Agent reading hook
+
+Realtime collection is the preferred ingress, but a long-running Agent may also
+need a bounded provider-history tail at the beginning of every LoopX turn. The
+collector config can opt into `turn_start_sync`. This is not a background-only
+sync: it is a pre-decision capability hook with the following ordering:
+
+```text
+turn-start hook
+  -> read one bounded provider page per route
+  -> commit and read back owner-private inbox events and cursor
+  -> recompute quota inbox urgency in the same CLI invocation
+  -> agent_read_required=true when new events were accepted
+  -> selected inbox lane drains private message content before ordinary work
+  -> Agent chooses steering / Goal replan / context capture /
+     continue-current-work / no-follow-up
+  -> durable effect or no-follow-up receipt -> ACK
+```
+
+Core owns the provider-neutral hook registration, output budget, allowed
+owner-private write scopes, failure isolation, and `agent_read_required`
+contract. The Lark extension owns history pagination, provider-envelope
+validation, private cursors, and inbox readback. The CLI composition root runs
+the hook before status/quota projection. Raw content remains only in the local
+inbox and appears to the Agent only through the existing goal-bound
+`drain_command`; it never enters the public Goal registry, hook receipt, or
+quota packet.
+
+The distinction between `empty`, `provider_contract_error`, permission failure,
+and provider unavailability is mandatory. A success envelope whose message list
+does not match the declared provider schema fails closed and cannot be treated
+as an empty inbox. Hook failure is isolated from ordinary Goal state, but it is
+visible in `turn_start_capability_hook_dispatch` and does not claim that Agent
+reading occurred.
+
+The feature is default-off. Enable it only with `configured_chat_all` and
+`material_review.enabled=true` on every route, so every newly accepted message
+enters an Agent semantic-triage lane rather than being synchronized and ignored:
+
+```json
+{
+  "schema_version": "lark_event_collector_config_v1",
+  "enabled": true,
+  "service_name": "loopx-project-context",
+  "identity": "bot",
+  "profile": "project-context-bot",
+  "supervisor": "systemd",
+  "consume_timeout": "30m",
+  "turn_start_sync": {
+    "enabled": true,
+    "initial_lookback_seconds": 900,
+    "overlap_seconds": 5,
+    "page_size": 50
+  },
+  "routes": [
+    {
+      "route_key": "requirements-a",
+      "chat_id": "oc_<local-private-chat-id>",
+      "event_inbox_config": ".loopx/config/lark/requirements-a.json"
+    }
+  ]
+}
+```
+
+Each completed poll opens a new forward window from the previous end with a
+small overlap. Inbox `message_id` deduplication makes the overlap replay-safe.
+When a page reports `has_more`, later turns resume the same private page token
+before opening a new window. The initial lookback is bounded to seven days,
+the overlap to five minutes, and each route reads at most one 50-message page
+per turn. Cursor and single-flight lock identity combine the public-safe route
+key with a digest of the configured profile, chat, inbox config, inbox path,
+and capture scope. Two Agent-scoped collectors may therefore reuse a semantic
+route key without sharing progress or permanently rejecting each other's
+source binding, while duplicate registrations for the same source still share
+one single-flight boundary.
 
 Use `addressed_only` only when direct bot mentions are the entire feedback
 contract. A review or collaboration inbox that accepts non-mention replies to
@@ -75,7 +152,11 @@ The inbox is opt-in. Create a local-private generic Lark inbox config:
   "schema_version": "lark_event_inbox_config_v0",
   "enabled": true,
   "inbox_dir": ".loopx/inbox/team-feedback",
-  "capture_scope": "configured_chat_all"
+  "capture_scope": "configured_chat_all",
+  "material_review": {
+    "enabled": true,
+    "drain_limit": 20
+  }
 }
 ```
 
@@ -92,6 +173,13 @@ presentation and reply context, not an additional ingress filter for
 remain visible to the bound Agent. When more than one chat-wide Goal route is
 eligible for the same Bot target, routing fails closed instead of choosing one
 by iteration order.
+
+`material_review` is an independent, default-off scheduling boundary. It
+requires `configured_chat_all`; when enabled, captured messages and normalized
+attachments that do not require a Bot reply produce `material_review_due`.
+`drain_limit` is bounded to 1–100 and defaults to 20. Direct questions,
+mentions, and verified Bot replies continue to use `reply_due` and take
+precedence, so material review never grants outbound reply authority.
 
 Optional source-thread replies are a separate, default-off boundary. Bind an
 explicit non-default bot profile to the same local-private chat. An
@@ -157,30 +245,50 @@ inbox config but owns host-only details such as the chat id and supervisor:
 
 ```json
 {
-  "schema_version": "lark_event_collector_config_v0",
+  "schema_version": "lark_event_collector_config_v1",
   "enabled": true,
   "service_name": "loopx-lark-feedback",
   "event_key": "im.message.receive_v1",
   "identity": "bot",
   "profile": "project-review-bot",
   "supervisor": "launchd",
-  "chat_id": "oc_<local-private-chat-id>",
   "consume_timeout": "30m",
   "lark_cli_bin": "lark-cli",
-  "event_inbox_config": ".loopx/config/lark/event-inbox.json"
+  "routes": [
+    {
+      "route_key": "requirements-a",
+      "chat_id": "oc_<local-private-chat-id-a>",
+      "event_inbox_config": ".loopx/config/lark/requirements-a.json"
+    },
+    {
+      "route_key": "requirements-b",
+      "chat_id": "oc_<local-private-chat-id-b>",
+      "event_inbox_config": ".loopx/config/lark/requirements-b.json"
+    }
+  ]
 }
 ```
 
-The packaged v0 lifecycle accepts only `im.message.receive_v1`, bot identity,
-an isolated `loopx-` service name, and `configured_chat_all`. These constraints
-match the canonical inbox schema, avoid collisions with unrelated user services,
-and make thread completeness explicit instead of pretending that an
-`addressed_only` consumer sees later unaddressed replies. Plan and install
-output never returns the chat id, local paths, generated jq, or credentials.
+The packaged lifecycle accepts only `im.message.receive_v1`, bot identity, an
+isolated `loopx-` service name, and `configured_chat_all`. Config v1 requires a
+unique lowercase public-safe `route_key` for each route, consumes one
+profile-bound event stream, and routes each configured chat into a distinct
+inbox config and inbox path. Missing, unsafe, or duplicate route keys, duplicate
+chat routes, shared inbox paths, reply chat mismatches, and route profile
+divergence fail closed. Each accepted event persists the configured route key,
+so aggregate drain gives the Agent a stable requirement-context identity without
+exposing a private chat id. A missing or mismatched persisted route key also
+fails closed instead of silently reclassifying an older message. Each inbox therefore
+retains independent pending/processed state and source-context reply placement
+while one Bot can serve several chats without competing consumers. The v0
+single-chat shape remains accepted and is normalized to one route. Plan,
+install, run, and status output expose only route and health counts; they never
+return profile values, chat ids, local paths, generated jq, or credentials.
 
 An enabled collector must bind an explicit non-default Lark CLI profile. When
-`profile` is omitted, LoopX may reuse the enabled inbox reply
-`sender_profile`; when both are present they must match. The generated service
+`profile` is omitted, LoopX may reuse the shared enabled inbox reply
+`sender_profile`; every routed reply profile must resolve to that same value.
+When both are present they must match. The generated service
 passes the profile-bound collector config to the LoopX runtime, which places
 `--profile` before both `event consume` and message readback calls. Collection,
 reply-target verification, and optional replies therefore cannot silently use
@@ -232,27 +340,39 @@ local host write and therefore requires explicit `--execute`. Status separates
 healthy before the first message, while acceptance of a real integration still
 requires one post-install event to appear in the inbox.
 
-Register the generic inbox pointer once at the goal boundary:
+Register one inbox or the v1 routed collector as the Agent-owned goal boundary.
+The latter keeps one authority and one Agent lane while exposing aggregate,
+content-free urgency across all configured chats:
 
 ```bash
 loopx configure-goal \
   --goal-id <goal-id> \
-  --lark-event-inbox-config .loopx/config/lark/event-inbox.json
+  --lark-event-inbox-agent-id <context-assistant-agent-id> \
+  --lark-event-inbox-config .loopx/config/lark/collector.json
 
 # Review the preview, then apply explicitly.
 loopx configure-goal \
   --goal-id <goal-id> \
-  --lark-event-inbox-config .loopx/config/lark/event-inbox.json \
+  --lark-event-inbox-agent-id <context-assistant-agent-id> \
+  --lark-event-inbox-config .loopx/config/lark/collector.json \
   --execute
+
+# Drain all configured chats through the same Agent lane. Each item retains
+# route-specific source-context reply guidance; message-scoped follow-up
+# commands resolve exactly one isolated inbox or fail closed.
+loopx lark-inbox drain \
+  --goal-id <goal-id> \
+  --agent-id <context-assistant-agent-id>
 ```
 
 The configuration catalog exposes this optional capability on demand. Quota
 projects `enabled`, `config_pointer_registered`, a local control command, and a
 content-free urgency summary; it never projects the private path, message ids,
 senders, or message bodies. The summary includes
-pending/direct-question/direct-mention/verified-bot-reply counts and the oldest
-pending age. A configured direct mention or verified reply to a message authored
-by the configured bot becomes a high-priority `lark_event_inbox` work lane
+pending/direct-question/direct-mention/verified-bot-reply counts, routed inbox
+counts, and the oldest pending age. It does not expose route chat ids or profile
+names. A configured direct mention or verified reply to a message authored by
+the configured bot becomes a high-priority `lark_event_inbox` work lane
 before ordinary monitor or advancement work. Generated heartbeat bodies run the
 actual goal-boundary `drain_command`;
 `loopx --registry <invoked-registry> lark-inbox drain --goal-id <goal-id>`
@@ -294,12 +414,40 @@ files collapse by `message_id`; repeated acknowledgement is idempotent.
 reaction and finish any pending received-reaction cleanup without creating
 another processing reaction.
 
-Urgency classification stays local: explicit `@` mentions of the configured
-bot/LoopX, bounded question signals on addressed events, and provider-verified
-direct replies to the configured bot produce counts only. A question elsewhere in the
-group or a reply to a human does not become `reply_due`. The agent still drains
-and interprets the source event before deciding the durable effect or reply; the
-summary is a scheduling signal, not semantic authority.
+For unaddressed material, use the dedicated settlement command rather than a
+reply. It accepts either an event-bound committed external effect receipt or an
+explicit no-follow-up rationale. The latter becomes a deterministic
+`no_follow_up` effect receipt; repeated execution returns `already_settled`
+without duplicating the ACK. Receipt replay/conflict checks, the ledger commit,
+and the processed-message ACK share one per-inbox lock. The ledger remains
+ledger-first, so a retry after interruption repairs an ACK that was not yet
+written without losing a concurrent receipt or processed-message update.
+
+```bash
+loopx lark-inbox material-review \
+  --project . \
+  --config .loopx/config/lark/event-inbox.json \
+  --message-id om_xxx \
+  --no-follow-up 'Informational material already captured.'
+
+loopx lark-inbox material-review \
+  --project . \
+  --config .loopx/config/lark/event-inbox.json \
+  --message-id om_xxx \
+  --no-follow-up 'Informational material already captured.' \
+  --execute
+```
+
+Urgency classification stays local. Under `configured_chat_all`, provider-native
+mention evidence is normalized into a compact `addressed_to_bot` flag before the
+event is persisted. Only that typed flag or a provider-verified direct reply can
+produce Bot reply urgency; bounded question signals distinguish a direct question
+only after addressing is proven. A question elsewhere in the group, an `@` mention
+of another member, Bot-name prose, or a reply to a human remains material review and
+does not become `reply_due`. Legacy persisted events without typed addressing also
+fail closed to material review. The agent still drains and interprets the source
+event before deciding the durable effect or reply; the summary is a scheduling
+signal, not semantic authority.
 
 For a direct question, explicit bot mention, or verified reply to the configured
 bot, write the requested durable effect first, preview one concise reply,

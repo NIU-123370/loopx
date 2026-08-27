@@ -50,7 +50,9 @@ task workspace at the returned `host-visible` alias, and an optional formal Loop
 profile at its verified absolute path. The surrounding host root, original task
 path, ambient host `/tmp`, nested host mounts, symlinked work children, and
 `/proc/1/root` escape path are absent. The helper requires unprivileged user, mount,
-and PID namespaces plus `pivot_root` and fails closed when its roots overlap.
+and PID namespaces, `pivot_root`, and `tini`. It runs `tini` as the isolated PID 1
+so long-lived workers reap orphaned command subprocesses, and fails closed when
+its roots overlap or the init resolves from a mutable task/profile/work root.
 
 ```python
 from loopx.capabilities.benchmark_toolkit.native_codex_isolation import (
@@ -559,6 +561,25 @@ LoopX with the hint. The interaction contrast compares the two LoopX effects. A
 historical arm that mixed startup guidance and domain guidance is diagnostic only;
 renaming it does not make it a member of this factorial study.
 
+After all four cells have board rows, pass the compact contract back to the board
+read model:
+
+```bash
+loopx benchmark experiment-board-show \
+  --goal-id <goal-id> \
+  --four-arm-contract-json <compact-four-arm-contract.json> \
+  --format json
+```
+
+The factorial projection selects exactly one score-countable run per declared cell,
+checks exact anchors, non-factor parity, and distinct LoopX/non-LoopX runtime
+cohorts, then reports the three conditional effects plus their
+difference-in-differences. It fails closed on missing or ambiguous cells. This is
+separate from the standard matched-pair projection: the hinted Goal cell remains a
+`control`, not a baseline, and the hinted LoopX cell is qualified only through the
+explicit factorial contract. The read model does not infer membership from arm
+names and does not elevate design qualification into runner or scorer authority.
+
 ## Experiment lifecycle
 
 A countable experiment uses the toolkit in this order:
@@ -700,6 +721,10 @@ loopx benchmark experiment-board-show \
   --goal-id <goal-id> \
   --format json
 ```
+
+For a preregistered four-arm study, add
+`--four-arm-contract-json <compact-four-arm-contract.json>` to project conditional
+effects and the interaction contrast alongside ordinary matched comparisons.
 
 Preview and then execute an idempotent row update when a run starts or reaches a
 terminal state:

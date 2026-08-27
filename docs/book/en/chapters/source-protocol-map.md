@@ -338,7 +338,7 @@ instead of teaching the protocol.
 Do not infer public work from maintainer-local state. Use public surfaces:
 
 1. Read
-   [`CONTRIBUTOR_TASKS.md`](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md).
+   the [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md).
 2. Choose a `Starter`, `Focused`, or already-agreed design task.
 3. Read the protocols and validation named by that task.
 4. State the smallest intended slice in the linked Issue.
@@ -350,7 +350,7 @@ Do not create public tasks from:
 - `.loopx/`, `.codex/goals/`, or live active state;
 - private benchmark traces, raw Agent sessions, or verifier output;
 - internal documents, production credentials, or machine paths;
-- speculative duplication of maintainer-owned live runs.
+- speculative duplication of `Maintainer-owned` live runs.
 
 Public contributions build context from public-safe protocols, Issues, and fixtures.
 
@@ -364,6 +364,79 @@ Contributions do not have to change runtime code. Public tasks can also deliver:
 
 For every artifact, state the reader-visible result, the authority that maintains the fact, and the event
 that makes the document, fixture, or compatibility claim stale.
+
+### How a community signal becomes bounded work
+
+This section and its Chinese counterpart are semantic mirrors. A material difference in cases, status,
+conclusions, or link targets is a documentation defect.
+
+<!-- community-casebook:signal-to-bounded-work:start -->
+<!-- community-casebook:question-before-fix -->
+
+**A question can be a contribution.** In
+[“How do I give a task a stopping point?”](https://github.com/huangruiteng/loopx/discussions/3069),
+a user reported that a completed task kept spinning. Before declaring a product defect, the community
+separated the report into four testable hypotheses: Goal acceptance, terminal closure, quota budget, and
+monitor cadence. Useful Q&A turns an imprecise experience into a minimal diagnostic path instead of
+guessing a code location.
+
+<!-- community-casebook:user-idea-to-contract -->
+
+**Map a methodology suggestion to existing contracts first.**
+[“Look back and retain”](https://github.com/huangruiteng/loopx/issues/2353)
+started from long-term user experience: an Agent should explain why its route changed and which earlier
+work remains valid. The discussion did not immediately create a second memory system. It first compared
+the idea with the evidence log, Vision acceptance, and `goal_path_delta_v0`, then identified the remaining
+semantic gap. An Issue like this can improve product direction without shipping code.
+
+<!-- community-casebook:claim-before-code -->
+
+**Narrow authority before claiming implementation.** The
+[Pi `task_lease_v0` task](https://github.com/huangruiteng/loopx/issues/3549)
+records the existing capability owner, Host facade, in-scope work, non-goals, target base branch, and
+validation commands before implementation. It does not turn “Pi needs lease operations” into a new
+scheduler, storage system, or automatic lease lifecycle.
+
+These records are learning examples, not copies of current task state. Before participating, reopen the
+Issue to confirm that it has not been closed, redirected, or claimed, and use the
+[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+as the current public entrypoint. For `Maintainer-owned` work, ask for an independent helper slice instead
+of reproducing the active implementation in parallel.
+<!-- community-casebook:signal-to-bounded-work:end -->
+
+### RFC Review Lab: establish status before implementation
+
+This section and its Chinese counterpart are semantic mirrors.
+
+<!-- community-casebook:rfc-review-lab:start -->
+<!-- community-casebook:rfc-status -->
+
+Start with the
+[RFC Index](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/README.md)
+and read the formal status. `Accepted`, `Active research`, `Draft`, and `Draft integration proposal`
+permit different actions. The existence of an RFC or Discussion does not prove that an implementation is
+shipped, and it does not automatically create claimable work.
+
+<!-- community-casebook:rfc-community-proposal -->
+
+For example, community Discussion
+[#3157](https://github.com/huangruiteng/loopx/discussions/3157)
+proposes an event-driven control plane and unified policy decision. Do not begin review by asking whether
+the proposed directory tree looks clean. Ask:
+
+1. Where is the canonical authority and owner for quota, scheduler, event-store, and worker semantics?
+2. Does the proposal compose existing rules or create a second decision authority?
+3. Does it mistake an event store for an event bus with delivery semantics?
+4. Which stage first changes default behavior, and does it have an independent migration gate?
+5. What is the smallest verifiable slice, and how does failure return to the current path?
+
+<!-- community-casebook:rfc-output -->
+
+A useful RFC review returns an explicit disposition such as `accept`, `revise`, `require_evidence`, or
+`defer`, plus an owner, next artifact, and review condition. Cross-direction questions may enter an
+[Open Strategy Review](https://github.com/huangruiteng/loopx/blob/main/docs/community/open-strategy-reviews.md).
+A meeting does not replace a versioned RFC, bounded Issue, PR review, or maintainer authority.
+<!-- community-casebook:rfc-review-lab:end -->
 
 ## Decide whether the slice is right-sized
 

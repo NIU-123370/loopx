@@ -387,19 +387,25 @@ def infer_persisted_heartbeat_settlement_identity(
     goal_id: str,
     agent_id: str | None,
     todo_id: str | None,
+    allow_unbound_binding: bool = False,
 ) -> SettlementResult[SettlementIdentity] | None:
-    """Recover the latest typed heartbeat identity when a caller omits its turn id.
+    """Recover the latest typed heartbeat identity when a caller omits identity fields.
 
     This is a compatibility recovery seam, not a second source of truth. It
     considers only the newest same-agent accountable writeback or spend, and
     then revalidates that candidate against the original heartbeat guard.
-    Unrelated Todo lineages and legacy untyped runs fall back to the existing
+    Callers normally supply the Todo binding and omit only the Turn. A visible
+    Goal delivery-completion path may opt into recovering both binding and Turn
+    from a fully typed persisted run after the frontier has already replanned.
+    Unrelated lineages and legacy untyped runs fall back to the existing
     frontier binding rules.
     """
 
     normalized_agent_id = normalize_todo_claimed_by(agent_id)
     normalized_todo_id = normalize_todo_id(todo_id)
-    if not normalized_agent_id or not normalized_todo_id:
+    if not normalized_agent_id or (
+        not normalized_todo_id and not allow_unbound_binding
+    ):
         return None
 
     candidate: dict[str, Any] | None = None
@@ -430,41 +436,84 @@ def infer_persisted_heartbeat_settlement_identity(
 
     if candidate is None:
         return None
+    candidate_agent_id = normalize_todo_claimed_by(candidate.get("agent_id"))
+    if allow_unbound_binding and candidate_agent_id != normalized_agent_id:
+        return _identity_mismatch(
+            "persisted settlement identity mismatch: accountable run is not "
+            "bound to the requesting Agent"
+        )
+    persisted_value = candidate.get("settlement_identity")
+    persisted = persisted_value if isinstance(persisted_value, Mapping) else {}
     candidate_todo_id = normalize_todo_id(candidate.get("todo_id"))
-    if candidate_todo_id != normalized_todo_id:
-        return None
+    candidate_replan_obligation_id = normalize_todo_replan_obligation_id(
+        candidate.get("replan_obligation_id")
+    )
+    if normalized_todo_id:
+        if candidate_todo_id != normalized_todo_id:
+            return None
+        candidate_replan_obligation_id = None
+    else:
+        if not persisted:
+            return _identity_mismatch(
+                "unbound visible-goal settlement recovery requires a fully "
+                "typed persisted identity"
+            )
+        persisted_todo_id = normalize_todo_id(persisted.get("todo_id"))
+        persisted_replan_obligation_id = normalize_todo_replan_obligation_id(
+            persisted.get("replan_obligation_id")
+        )
+        if bool(persisted_todo_id) == bool(persisted_replan_obligation_id):
+            return _identity_mismatch(
+                "persisted settlement identity must contain exactly one Todo or "
+                "autonomous replan binding"
+            )
+        if candidate_todo_id != persisted_todo_id:
+            return _identity_mismatch(
+                "persisted settlement identity mismatch: Todo binding differs "
+                "from the accountable run"
+            )
+        if candidate_replan_obligation_id != persisted_replan_obligation_id:
+            return _identity_mismatch(
+                "persisted settlement identity mismatch: autonomous replan "
+                "binding differs from the accountable run"
+            )
+        candidate_todo_id = persisted_todo_id
+        candidate_replan_obligation_id = persisted_replan_obligation_id
     candidate_turn_id = str(candidate.get("turn_instance_id") or "").strip()
+    persisted_turn_id = str(persisted.get("turn_instance_id") or "").strip()
+    if allow_unbound_binding:
+        if not candidate_turn_id or candidate_turn_id != persisted_turn_id:
+            return _identity_mismatch(
+                "persisted settlement identity mismatch: turn_instance_id differs "
+                "from the accountable run"
+            )
     if not candidate_turn_id:
         return None
 
     identity = SettlementIdentity(
         goal_id=goal_id,
         agent_id=normalized_agent_id,
-        todo_id=normalized_todo_id,
+        todo_id=candidate_todo_id,
         turn_instance_id=candidate_turn_id,
+        replan_obligation_id=candidate_replan_obligation_id,
     )
-    persisted_value = candidate.get("settlement_identity")
-    persisted = persisted_value if isinstance(persisted_value, Mapping) else {}
-    for field, expected in (
-        ("goal_id", identity.goal_id),
-        ("agent_id", identity.agent_id),
-        ("todo_id", identity.todo_id),
-        ("turn_instance_id", identity.turn_instance_id),
-        ("effect_id", identity.effect_id),
-    ):
+    for field, expected in identity.as_dict().items():
         actual = str(persisted.get(field) or "").strip()
-        if actual and actual != expected:
+        if (allow_unbound_binding and actual != expected) or (
+            not allow_unbound_binding and actual and actual != expected
+        ):
             return _identity_mismatch(
                 "persisted settlement identity mismatch: "
-                f"{field} is {actual} but expected {expected}"
+                f"{field} is {actual or 'missing'} but expected {expected}"
             )
 
     return resolve_heartbeat_settlement_identity(
         runtime_root,
         goal_id=goal_id,
         agent_id=normalized_agent_id,
-        todo_id=normalized_todo_id,
+        todo_id=identity.todo_id,
         turn_instance_id=candidate_turn_id,
+        replan_obligation_id=identity.replan_obligation_id,
     )
 
 

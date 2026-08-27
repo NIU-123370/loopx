@@ -453,11 +453,11 @@ def main() -> int:
         assert sum(1 for entry in wake_entries if entry[:1] == ["paste-buffer"]) == 2, wake_entries
         assert sum(1 for entry in wake_entries if entry[:1] == ["send-keys"] and entry[-1] == "Enter") == 2, wake_entries
         assert any("$LOOPX_PANE_A2A_TICK" in " ".join(entry) for entry in wake_entries), wake_entries
-        launcher_source = (ROOT / "loopx/visible_multi_agent_launcher.py").read_text(
+        launcher_source = (ROOT / "demo/visible_multi_agent_launcher.py").read_text(
             encoding="utf-8"
         )
         contract_source = (
-            ROOT / "loopx/control_plane/agents/multi_agent/contract.py"
+            ROOT / "demo/multi_agent/contract.py"
         ).read_text(
             encoding="utf-8"
         )

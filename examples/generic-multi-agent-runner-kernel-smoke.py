@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from loopx.control_plane.agents.multi_agent.contract import (  # noqa: E402
+from demo.multi_agent.contract import (  # noqa: E402
     GENERIC_MULTI_AGENT_COMPACT_STATUS_SCHEMA_VERSION,
     GENERIC_MULTI_AGENT_ROLE_PROFILE_SCHEMA_VERSION,
     THREE_LAYER_MINIMALITY_CONTRACT_SCHEMA_VERSION,
@@ -23,7 +23,7 @@ from loopx.control_plane.agents.multi_agent.contract import (  # noqa: E402
     generic_role_prompt,
     role_skill_profile,
 )
-from loopx.control_plane.agents.multi_agent.runtime_scripts import (  # noqa: E402
+from demo.multi_agent.runtime_scripts import (  # noqa: E402
     CODEX_TUI_EXEC_PY,
     SCOPED_LOOPX_WRAPPER_PY,
 )
@@ -145,11 +145,11 @@ def main() -> int:
     assert "LOOPX_CODEX_TRUST_WORKSPACE" in CODEX_TUI_EXEC_PY
     assert "trust_level" in CODEX_TUI_EXEC_PY
 
-    source = (ROOT / "loopx/control_plane/agents/multi_agent/contract.py").read_text(
+    source = (ROOT / "demo/multi_agent/contract.py").read_text(
         encoding="utf-8"
     )
     runtime_source = (
-        ROOT / "loopx/control_plane/agents/multi_agent/runtime_scripts.py"
+        ROOT / "demo/multi_agent/runtime_scripts.py"
     ).read_text(
         encoding="utf-8"
     )

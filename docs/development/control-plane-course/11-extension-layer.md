@@ -718,7 +718,7 @@ LoopX 的 multi-agent 产品采用三层 minimality：
 | Preset | domain roles、handoff hints、metric/evidence adapter、defaults | runner lifecycle、通用 replan、TUI、claim/quota protocol |
 | Kernel | runner、真实 Codex TUI panes、workspace-safe launch、pane-local tick、todo/evidence/status、vision/replan | domain-specific research/support/sales 语义 |
 
-一个新产品不应 copy Auto Research runner。它只写自己的薄 preset，然后复用 `loopx/control_plane/agents/multi_agent/`。
+一个新产品不应 copy Auto Research runner。它只写自己的薄 preset，然后复用 `demo/multi_agent/`。
 
 Kernel 的关键 invariant：
 
@@ -1074,7 +1074,7 @@ goal boundary、quota、preflight、effect receipt 与 writeback。
 
 ### 6. Auto Research 是薄 preset，不是第二个 kernel
 
-`loopx/capabilities/auto_research/preset.py` 公开地限定了 line-count claim：
+`demo/auto_research/preset.py` 公开地限定了 line-count claim：
 
 ```python
 def build_auto_research_minimal_a2a_recipe(...):
@@ -1172,9 +1172,9 @@ kernel 代码、supervisor 为什么不能借扩展层获得 durable leader auth
 4. `docs/product/domain-capability-packs.md`
 5. `loopx/domain_packs/ml_experiment.py`
 6. `docs/reference/protocols/multi-agent-three-layer-minimality-v0.md`
-7. `loopx/control_plane/agents/multi_agent/`
-8. `loopx/capabilities/auto_research/README.md`
-9. `loopx/capabilities/auto_research/preset.py`
+7. `demo/multi_agent/`
+8. `demo/auto_research/README.md`
+9. `demo/auto_research/preset.py`
 10. `docs/reference/protocols/peer-supervisor-v0.md`
 11. `loopx/extensions/governed_capability_execution.py`
 12. `loopx/control_plane/governed_capability.ts`

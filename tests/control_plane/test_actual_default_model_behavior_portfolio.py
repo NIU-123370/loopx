@@ -15,6 +15,9 @@ from loopx.control_plane.quota.cli_projection import (
     compact_quota_should_run_cli_payload,
 )
 from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
+from loopx.control_plane.scheduler.execution_context import (
+    scheduler_execution_context_for_runtime_profile,
+)
 from loopx.control_plane.testing.actual_default_model_behavior_portfolio import (
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET,
     actual_default_model_behavior_scenario_catalog,
@@ -42,6 +45,11 @@ from loopx.control_plane.testing.model_tool_behavior import (
     ScriptedDoubaoExecTransport,
     ScriptedExecToolAction,
 )
+from loopx.control_plane.testing.quota_fixtures import (
+    quota_status_payload,
+    quota_todo_item,
+    quota_todo_summary,
+)
 from loopx.control_plane.testing.onboarding_model_behavior_qualification import (
     ONBOARDING_MODEL_BEHAVIOR_DECISION_SCHEMA_VERSION,
     ONBOARDING_MODEL_BEHAVIOR_RESULT_SCHEMA_VERSION,
@@ -68,6 +76,7 @@ from loopx.control_plane.testing.selected_todo_tool_behavior import (
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
     DoubaoTerminalSettlementToolBehaviorActor,
 )
+from loopx.quota import build_quota_should_run
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
     _build_fixture as _build_terminal_settlement_fixture,
 )
@@ -107,6 +116,25 @@ def _turn_decision(request: Mapping[str, Any]) -> dict[str, Any]:
         route = "wait"
     else:
         route = "stop"
+    semantic_contract = model_behavior_semantic_contract_from_packet(
+        packet,
+        arm="full_packet",
+    )
+    requested_semantic_fields = tuple(
+        dict(request.get("response_contract") or {}).get(
+            "semantic_contract_fields",
+            tuple(semantic_contract),
+        )
+    )
+    intended_action_kinds = (
+        ["notify", "wait"]
+        if blocking_user_gate
+        else (
+            ["inspect", "test", "writeback", "spend"]
+            if packet.get("planning_horizon")
+            else ["inspect", "edit", "test", "writeback", "spend"]
+        )
+    )
     return {
         "schema_version": MODEL_BEHAVIOR_DECISION_SCHEMA_VERSION,
         "decision": route,
@@ -116,16 +144,11 @@ def _turn_decision(request: Mapping[str, Any]) -> dict[str, Any]:
         "delivery_allowed": delivery_allowed,
         "quiet_noop_allowed": quiet_noop_allowed,
         "external_write_requested": False,
-        "intended_action_kinds": (
-            ["notify", "wait"]
-            if blocking_user_gate
-            else ["inspect", "edit", "test", "writeback", "spend"]
-        ),
+        "intended_action_kinds": intended_action_kinds,
         "reason_codes": ["source_aligned"],
-        "semantic_contract": model_behavior_semantic_contract_from_packet(
-            packet,
-            arm="full_packet",
-        ),
+        "semantic_contract": {
+            field: semantic_contract[field] for field in requested_semantic_fields
+        },
     }
 
 
@@ -136,6 +159,75 @@ def _turn_actor(request: Mapping[str, Any]) -> dict[str, Any]:
         "decision": _turn_decision(request),
         "tool_calls": [],
     }
+
+
+def test_weak_turn_actor_executes_required_successor_replan_with_user_notice() -> None:
+    agent_id = "codex-weak-turn-fixture"
+    prerequisite_id = "todo_weak_prerequisite"
+    successor_id = "todo_weak_ready_successor"
+    agent_todos = quota_todo_summary(
+        [
+            quota_todo_item(
+                todo_id=prerequisite_id,
+                index=1,
+                text="[P0] Complete the predecessor.",
+                status="done",
+                claimed_by=agent_id,
+            ),
+            quota_todo_item(
+                todo_id=successor_id,
+                index=2,
+                text="[P0] Resume the deferred successor.",
+                status="deferred",
+                claimed_by=agent_id,
+                resume_when=f"todo_done:{prerequisite_id}",
+            ),
+        ]
+    )
+    user_todos = quota_todo_summary(
+        [
+            quota_todo_item(
+                todo_id="todo_weak_optional_notice",
+                index=3,
+                role="user",
+                task_class="user_action",
+                text="Review the optional setting.",
+                bound_agent=agent_id,
+            )
+        ],
+        role="user",
+    )
+    packet = build_quota_should_run(
+        quota_status_payload(
+            goal_id="weak-successor-replan-fixture",
+            status="active",
+            recommended_action="Resume the deferred successor.",
+            agent_todos=agent_todos,
+            user_todos=user_todos,
+            coordination={
+                "agent_model": "peer_v1",
+                "registered_agents": [agent_id],
+            },
+        ),
+        goal_id="weak-successor-replan-fixture",
+        agent_id=agent_id,
+        scheduler_execution_context=(
+            scheduler_execution_context_for_runtime_profile(
+                "codex_app_heartbeat"
+            )
+        ),
+    )
+
+    decision = _turn_decision({"packet": packet})
+
+    assert decision["decision"] == "execute", decision
+    assert decision["selected_todo_id"] == successor_id, decision
+    assert decision["user_action_required"] is False, decision
+    assert decision["must_attempt_work"] is True, decision
+    assert decision["delivery_allowed"] is False, decision
+    assert decision["quiet_noop_allowed"] is False, decision
+    assert packet["interaction_contract"]["user_channel"]["non_blocking"] is True
+    assert "response_plan" not in packet["interaction_contract"]
 
 
 def _onboarding_actor(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -279,7 +371,10 @@ def _selected_read_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     interaction = dict(payload["interaction_contract"])
     agent_channel = dict(interaction.get("agent_channel") or {})
     action_text = " ".join(
-        (str(selected_todo.get("text") or ""), str(agent_channel.get("primary_action") or ""))
+        (
+            str(selected_todo.get("text") or ""),
+            str(agent_channel.get("primary_action") or ""),
+        )
     )
     match = re.search(r"fixture/[a-z0-9_-]+\.json", action_text)
     if match is None:
@@ -501,9 +596,7 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
 
     selected = packets["turn_selected_todo"]
     assert selected["selected_todo"]["todo_id"] == "todo_portfolio001"
-    assert selected["selected_todo"]["text"] == (
-        SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT
-    )
+    assert selected["selected_todo"]["text"] == (SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT)
     assert selected["recommended_action"] == SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT
 
     selection_commands = packets["onboarding_goal_selection_gate"]["command_pack"][
@@ -514,17 +607,20 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
         "status",
         "goal_selection_choices",
     }
-    selection_activation = packets["onboarding_goal_selection_gate"][
-        "command_pack"
-    ]["host_loop_activation"]
+    selection_activation = packets["onboarding_goal_selection_gate"]["command_pack"][
+        "host_loop_activation"
+    ]
     assert selection_activation == {
         "activation_state": "goal_selection_required",
         "activation_allowed": False,
         "activation_required_after_todo_write": False,
     }
-    assert onboarding_entry_semantic_contract(
-        packets["onboarding_goal_selection_gate"]
-    )["host_loop_activation_after_todo_write"] is False
+    assert (
+        onboarding_entry_semantic_contract(packets["onboarding_goal_selection_gate"])[
+            "host_loop_activation_after_todo_write"
+        ]
+        is False
+    )
     gate = packets["turn_human_gate"]
     assert gate["mode"] == "should-run"
     gate_signature = quota_action_signature_document(gate)
@@ -567,9 +663,10 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
     assert vision["trigger_kinds"] == ["required_agent_vision_missing"]
     assert semantics["required_reads"] == []
     assert replan["replan_action_packet"]["decision"] == "replan_required"
-    assert replan["autonomous_replan_obligation"]["replan_context"][
-        "delivery"
-    ] == "host_projected"
+    assert (
+        replan["autonomous_replan_obligation"]["replan_context"]["delivery"]
+        == "host_projected"
+    )
     assert semantics["scheduler_action"]["action"] == "run_now"
     continuation_source = sources["turn_quota_hot_path_selected_todo_invariance"]
     continuation = packets["turn_quota_hot_path_selected_todo_invariance"]
@@ -605,8 +702,9 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
     assert capability["interaction_contract"]["mode"] == "capability_bridge_repair"
     assert capability["capability_gate"]["action"] == "repair_bridge"
     assert "private_read" in capability["capability_gate"]["repair_missing"]
-    assert "next_task_action.operation" in (
-        capability_signature["action"]["primary_action"]
+    assert (
+        "next_task_action.operation"
+        in (capability_signature["action"]["primary_action"])
     )
     future_fallback = packets["turn_future_primary_fallback"]
     future_signature = quota_action_signature_document(future_fallback)
@@ -618,9 +716,54 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
     assert future_portfolio["unavailable_higher_priority"][0]["todo_id"] == (
         "todo_future_primary"
     )
-    assert future_portfolio["unavailable_higher_priority"][0][
-        "availability_reason"
-    ] == "scheduled_for_future"
+    assert (
+        future_portfolio["unavailable_higher_priority"][0]["availability_reason"]
+        == "scheduled_for_future"
+    )
+    external_wait = packets["turn_external_wait_fallback"]
+    external_signature = quota_action_signature_document(external_wait)
+    assert external_signature["action"]["selected_todo"]["todo_id"] == (
+        "todo_external_wait_fallback"
+    )
+    external_portfolio = external_signature["action"]["action_portfolio"]
+    assert external_portfolio["schema_version"] == "quota_action_portfolio_v2"
+    assert external_portfolio["unavailable_higher_priority"][0]["todo_id"] == (
+        "todo_external_wait_primary"
+    )
+    assert (
+        external_portfolio["unavailable_higher_priority"][0]["availability_reason"]
+        == "resume_condition_pending"
+    )
+    assert external_portfolio["suggested_actions"][0]["continuation_hint"] == (
+        "Implement the fallback and run its focused validation."
+    )
+    strategic = packets["turn_planning_horizon_strategic_context"]
+    strategic_horizon = strategic["planning_horizon"]
+    assert strategic_horizon["selected_todo_id"] == "todo_regression_gate"
+    assert [item["todo_id"] for item in strategic_horizon["work_items"]] == [
+        "todo_regression_gate",
+        "todo_per_model_tests",
+        "todo_runtime_admission",
+        "todo_allowlist_policy",
+        "todo_facts_source",
+    ]
+    assert strategic_horizon["attention_todo_ids"] == [
+        "todo_per_model_tests",
+        "todo_runtime_admission",
+        "todo_allowlist_policy",
+    ]
+    assert strategic_horizon["completeness"]["source_context_todo_count"] == 5
+    assert strategic_horizon["completeness"]["complete"] is True
+    strategic_semantics = model_behavior_semantic_contract_from_packet(
+        strategic,
+        arm="full_packet",
+    )["planning_horizon"]
+    assert strategic_semantics["present"] is True
+    assert strategic_semantics["relation_count"] == 8
+    assert strategic_semantics["relation_kinds"] == [
+        "successor",
+        "resumes_when",
+    ]
     regression_source = build_quota_hot_path_compaction_regression_source()
     regression = packets["turn_quota_hot_path_compaction_regression"]
     assert (
@@ -686,17 +829,25 @@ def test_live_packet_builder_uses_production_blocking_gate_plan(tmp_path: Path) 
         "external_write_requested",
     )
     for clean_id, noisy_id in invariant_pairs:
-        assert len(
-            json.dumps(sources[noisy_id], ensure_ascii=False, indent=2).encode("utf-8")
-        ) > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
-        assert len(
-            json.dumps(packets[noisy_id], ensure_ascii=False, indent=2).encode("utf-8")
-        ) <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
+        assert (
+            len(
+                json.dumps(sources[noisy_id], ensure_ascii=False, indent=2).encode(
+                    "utf-8"
+                )
+            )
+            > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
+        )
+        assert (
+            len(
+                json.dumps(packets[noisy_id], ensure_ascii=False, indent=2).encode(
+                    "utf-8"
+                )
+            )
+            <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
+        )
         clean_decision = _turn_decision({"packet": packets[clean_id]})
         noisy_decision = _turn_decision({"packet": packets[noisy_id]})
-        assert {
-            field: clean_decision[field] for field in hard_fields
-        } == {
+        assert {field: clean_decision[field] for field in hard_fields} == {
             field: noisy_decision[field] for field in hard_fields
         }
         assert model_behavior_semantic_contract_from_packet(
@@ -740,6 +891,183 @@ def test_portfolio_oracle_catches_wrong_selected_todo(tmp_path: Path) -> None:
     assert selected["status"] == "failed"
     assert selected["repeats_completed"] == 2
     assert selected["failure_codes"] == ["source_mismatch:selected_todo_id"]
+
+
+def test_external_wait_oracle_rejects_model_following_unavailable_primary(
+    tmp_path: Path,
+) -> None:
+    def stale_primary_actor(request: Mapping[str, Any]) -> dict[str, Any]:
+        result = _turn_actor(request)
+        selected = dict(request["packet"].get("selected_todo") or {})
+        if selected.get("todo_id") == "todo_external_wait_fallback":
+            result["decision"] = {
+                **result["decision"],
+                "selected_todo_id": "todo_external_wait_primary",
+            }
+        return result
+
+    sources, packets = _scenario_inputs(tmp_path)
+    result = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-external-wait-stale-primary",
+        turn_actor=stale_primary_actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+    )
+
+    scenario = next(
+        item
+        for item in result["scenarios"]
+        if item["scenario_id"] == "turn_external_wait_fallback"
+    )
+    assert result["qualification_passed"] is False
+    assert scenario["status"] == "failed"
+    assert scenario["repeats_completed"] == 2
+    assert scenario["failure_codes"] == ["source_mismatch:selected_todo_id"]
+
+
+def test_external_wait_preflight_rejects_shared_projection_drift(
+    tmp_path: Path,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    source = deepcopy(sources["turn_external_wait_fallback"])
+    blocked = source["agent_todo_summary"]["resume_blocked_items"][0]
+    blocked["resume_condition"]["baseline_generation"] = 3
+    sources["turn_external_wait_fallback"] = source
+    packets["turn_external_wait_fallback"] = compact_quota_should_run_cli_payload(
+        source
+    )
+    calls = 0
+
+    def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _turn_actor(request)
+
+    with pytest.raises(
+        ValueError,
+        match="external-wait scenario must expose the pending P0 condition",
+    ):
+        run_actual_default_model_behavior_portfolio(
+            packets,
+            scenario_sources=sources,
+            qualification_id="actual-default-external-wait-projection-drift",
+            turn_actor=turn_actor,
+            onboarding_actor=_onboarding_actor,
+            selected_todo_actor=_selected_todo_actor,
+            replan_semantic_action_actor=_replan_semantic_action_actor,
+        )
+
+    assert calls == 0
+
+
+def test_planning_horizon_preflight_rejects_missing_compact_projection(
+    tmp_path: Path,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    packets["turn_planning_horizon_strategic_context"].pop("planning_horizon")
+    calls = 0
+
+    def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _turn_actor(request)
+
+    with pytest.raises(
+        ValueError,
+        match="actor packet diverges from source semantic contract",
+    ):
+        run_actual_default_model_behavior_portfolio(
+            packets,
+            scenario_sources=sources,
+            qualification_id="actual-default-planning-horizon-missing",
+            turn_actor=turn_actor,
+            onboarding_actor=_onboarding_actor,
+            selected_todo_actor=_selected_todo_actor,
+            replan_semantic_action_actor=_replan_semantic_action_actor,
+        )
+
+    assert calls == 0
+
+
+def test_planning_horizon_preflight_rejects_a_broken_middle_relation(
+    tmp_path: Path,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    horizon = packets["turn_planning_horizon_strategic_context"]["planning_horizon"]
+    horizon["relations"] = [
+        relation
+        for relation in horizon["relations"]
+        if not (
+            relation["from_todo_id"] == "todo_runtime_admission"
+            and relation["relation"] == "successor"
+        )
+    ]
+    calls = 0
+
+    def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _turn_actor(request)
+
+    with pytest.raises(
+        ValueError,
+        match="actor packet diverges from source semantic contract",
+    ):
+        run_actual_default_model_behavior_portfolio(
+            packets,
+            scenario_sources=sources,
+            qualification_id="actual-default-planning-horizon-broken-relation",
+            turn_actor=turn_actor,
+            onboarding_actor=_onboarding_actor,
+            selected_todo_actor=_selected_todo_actor,
+            replan_semantic_action_actor=_replan_semantic_action_actor,
+        )
+
+    assert calls == 0
+
+
+def test_planning_horizon_fixed_facts_oracle_rejects_shared_relation_drift(
+    tmp_path: Path,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    for packet in (
+        sources["turn_planning_horizon_strategic_context"],
+        packets["turn_planning_horizon_strategic_context"],
+    ):
+        horizon = packet["planning_horizon"]
+        horizon["relations"] = [
+            relation
+            for relation in horizon["relations"]
+            if not (
+                relation["from_todo_id"] == "todo_runtime_admission"
+                and relation["relation"] == "successor"
+            )
+        ]
+    calls = 0
+
+    def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _turn_actor(request)
+
+    with pytest.raises(
+        ValueError,
+        match="planning-horizon scenario must preserve the fixed typed strategic chain",
+    ):
+        run_actual_default_model_behavior_portfolio(
+            packets,
+            scenario_sources=sources,
+            qualification_id="actual-default-planning-horizon-shared-drift",
+            turn_actor=turn_actor,
+            onboarding_actor=_onboarding_actor,
+            selected_todo_actor=_selected_todo_actor,
+            replan_semantic_action_actor=_replan_semantic_action_actor,
+        )
+
+    assert calls == 0
 
 
 def test_portfolio_source_oracle_rejects_mutated_compact_user_action(
@@ -843,7 +1171,7 @@ def test_catalog_declares_independent_bounded_repeat_policy() -> None:
     }
 
     assert catalog["topology"] == "actual_default_one_arm"
-    assert len(catalog["scenarios"]) == 17
+    assert len(catalog["scenarios"]) == 19
     assert all(
         scenario["packet_view"]
         == (
@@ -868,9 +1196,7 @@ def test_catalog_declares_independent_bounded_repeat_policy() -> None:
         "turn_capability_monitor_repair",
         "turn_terminal_settlement",
     }
-    assert {
-        contrast["contrast_id"] for contrast in catalog["contrasts"]
-    } == {
+    assert {contrast["contrast_id"] for contrast in catalog["contrasts"]} == {
         "selected_todo_survives_omitted_diagnostics",
         "blocking_gate_survives_omitted_diagnostics",
         "blocking_gate_vs_non_blocking_notice",
@@ -895,6 +1221,17 @@ def test_catalog_declares_independent_bounded_repeat_policy() -> None:
             "automatic_retry_on_actor_error": False,
         }
         for scenario in catalog["scenarios"]
+    )
+    planning = next(
+        scenario
+        for scenario in catalog["scenarios"]
+        if scenario["scenario_id"] == "turn_planning_horizon_strategic_context"
+    )
+    assert planning["action_oracle"] == "planning_horizon_regression_gate_v0"
+    assert all(
+        "action_oracle" not in scenario
+        for scenario in catalog["scenarios"]
+        if scenario is not planning
     )
 
 
@@ -1005,7 +1342,8 @@ def test_portfolio_turn_actor_reads_actual_default_packet_without_semantic_echo(
     def turn_actor(request: Mapping[str, Any]) -> dict[str, Any]:
         requests.append(request)
         result = _turn_actor(request)
-        result["decision"].pop("semantic_contract", None)
+        if request["semantic_contract_required"] is False:
+            result["decision"].pop("semantic_contract", None)
         return result
 
     sources, packets = _scenario_inputs(tmp_path)
@@ -1020,10 +1358,10 @@ def test_portfolio_turn_actor_reads_actual_default_packet_without_semantic_echo(
     )
 
     assert result["qualification_passed"] is True
-    assert result["scenario_count"] == 17
+    assert result["scenario_count"] == 19
     assert result["contrast_count"] == 4
-    assert result["actor_call_budget"] == 34
-    assert result["actor_call_count"] == 34
+    assert result["actor_call_budget"] == 38
+    assert result["actor_call_count"] == 38
     assert result["failure_count"] == 0
     assert result["skip_count"] == 0
     assert result["contrast_failure_count"] == 0
@@ -1035,7 +1373,131 @@ def test_portfolio_turn_actor_reads_actual_default_packet_without_semantic_echo(
         request["packet_schema_version"] == FULL_QUOTA_DECISION_PACKET_SCHEMA_VERSION
         for request in requests
     )
-    assert all(request["semantic_contract_required"] is False for request in requests)
+    required_requests = [
+        request for request in requests if request["semantic_contract_required"]
+    ]
+    assert len(required_requests) == 2
+    assert all(
+        request["packet"]["selected_todo"]["todo_id"] == "todo_regression_gate"
+        for request in required_requests
+    )
+    assert all(
+        request["response_contract"]["semantic_contract_fields"]
+        == ["planning_horizon"]
+        for request in required_requests
+    )
+
+
+def test_planning_horizon_scenario_requires_bounded_semantic_readback(
+    tmp_path: Path,
+) -> None:
+    def forgetful_actor(request: Mapping[str, Any]) -> dict[str, Any]:
+        result = _turn_actor(request)
+        result["decision"].pop("semantic_contract", None)
+        return result
+
+    sources, packets = _scenario_inputs(tmp_path)
+    result = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-planning-horizon-forgetful-model",
+        turn_actor=forgetful_actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+    )
+
+    scenario = next(
+        item
+        for item in result["scenarios"]
+        if item["scenario_id"] == "turn_planning_horizon_strategic_context"
+    )
+    assert result["qualification_passed"] is False
+    assert scenario["status"] == "failed"
+    assert scenario["failure_codes"] == ["actor_result_invalid"]
+
+
+@pytest.mark.parametrize(
+    ("actions", "expected_pass", "failure_codes"),
+    [
+        (
+            ("inspect", "read", "test", "writeback", "spend"),
+            True,
+            [],
+        ),
+        (
+            ("test", "writeback", "spend"),
+            False,
+            ["action_oracle:first_action_must_inspect"],
+        ),
+        (
+            ("inspect", "edit", "test", "writeback", "spend"),
+            False,
+            ["action_oracle:forbidden_action:edit"],
+        ),
+        (
+            ("inspect", "read", "writeback", "spend"),
+            False,
+            ["action_oracle:test_must_precede_settlement"],
+        ),
+        (
+            ("inspect", "test", "spend", "writeback"),
+            False,
+            ["action_oracle:settlement_suffix_mismatch"],
+        ),
+        (
+            ("inspect", "writeback", "test", "writeback", "spend"),
+            False,
+            ["action_oracle:premature_settlement_action:writeback"],
+        ),
+        (
+            ("inspect", "spend", "test", "writeback", "spend"),
+            False,
+            ["action_oracle:premature_settlement_action:spend"],
+        ),
+    ],
+    ids=(
+        "bounded-read",
+        "missing-inspection",
+        "premature-edit",
+        "missing-test",
+        "reversed-settlement",
+        "premature-writeback",
+        "premature-spend",
+    ),
+)
+def test_planning_horizon_action_oracle_grades_semantic_stages(
+    tmp_path: Path,
+    actions: tuple[str, ...],
+    expected_pass: bool,
+    failure_codes: list[str],
+) -> None:
+    def actor(request: Mapping[str, Any]) -> dict[str, Any]:
+        result = _turn_actor(request)
+        if request["packet"].get("planning_horizon"):
+            result["decision"]["intended_action_kinds"] = list(actions)
+        return result
+
+    sources, packets = _scenario_inputs(tmp_path)
+    result = run_actual_default_model_behavior_portfolio(
+        packets,
+        scenario_sources=sources,
+        qualification_id="actual-default-planning-horizon-action-oracle",
+        turn_actor=actor,
+        onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+    )
+
+    scenario = next(
+        item
+        for item in result["scenarios"]
+        if item["scenario_id"] == "turn_planning_horizon_strategic_context"
+    )
+    assert result["qualification_passed"] is expected_pass
+    assert scenario["status"] == ("passed" if expected_pass else "failed")
+    assert scenario["failure_codes"] == failure_codes
+    assert scenario["observed_action_kind_sequences"] == [list(actions)]
 
 
 def test_portfolio_real_tool_scenarios_choose_from_latest_quota_result(
@@ -1055,7 +1517,7 @@ def test_portfolio_real_tool_scenarios_choose_from_latest_quota_result(
     boundary = result["boundary"]
     assert boundary["tools_enabled"] is True
     assert boundary["tool_enabled_scenario_count"] == 5
-    assert boundary["packet_interpretation_scenario_count"] == 12
+    assert boundary["packet_interpretation_scenario_count"] == 14
     assert boundary["automatic_retries"] is False
     assert boundary["raw_model_responses_persisted"] is False
     assert boundary["raw_packets_persisted"] is False

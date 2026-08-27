@@ -31,6 +31,31 @@ def shell_arg(value: str) -> str:
     return shlex.quote(value)
 
 
+def render_cli_command_prefix(
+    *,
+    cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
+) -> str:
+    prefix = shell_arg(cli_bin)
+    if runtime_root is not None:
+        prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
+    return prefix
+
+
+def render_register_agent_command(
+    goal_id: str,
+    *,
+    agent_id: str,
+    cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
+) -> str:
+    return (
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"register-agent --goal-id {shell_arg(goal_id)} "
+        f"--agent-id {shell_arg(agent_id)} --require-new"
+    )
+
+
 def shell_arg_or_placeholder(value: str) -> str:
     text = str(value)
     if text.startswith("<") and text.endswith(">"):
@@ -96,6 +121,7 @@ def render_quota_guard_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     available_capabilities: Any = None,
     runtime_profile: str | None = None,
@@ -135,7 +161,7 @@ def render_quota_guard_command(
         f"--registry {SHARED_GLOBAL_REGISTRY} " if include_shared_registry else ""
     )
     return (
-        f"{shell_arg(cli_bin)} --format json "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} --format json "
         f"{registry_arg}"
         f"quota should-run --goal-id {shell_arg(goal_id)}{agent_arg}"
         f"{capability_args}{scheduler_args}{turn_arg}"
@@ -165,6 +191,7 @@ def render_refresh_state_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     project: str | None = None,
     agent_id: str | None = None,
     progress_scope: str | None = None,
@@ -191,7 +218,8 @@ def render_refresh_state_command(
         else ""
     )
     return (
-        f"{shell_arg(cli_bin)} refresh-state --goal-id {shell_arg(goal_id)}"
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"refresh-state --goal-id {shell_arg(goal_id)}"
         f"{project_arg}{classification_arg}{scale_arg}{outcome_arg}{agent_arg}{scope_arg}"
     )
 
@@ -221,6 +249,7 @@ def render_heartbeat_prompt_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -242,7 +271,8 @@ def render_heartbeat_prompt_command(
         else ""
     )
     return (
-        f"{shell_arg(cli_bin)} heartbeat-prompt --{shell_arg(body)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}"
     )
@@ -252,6 +282,7 @@ def render_heartbeat_prompt_json_command(
     goal_id: str,
     *,
     cli_bin: str = "loopx",
+    runtime_root: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -273,7 +304,8 @@ def render_heartbeat_prompt_json_command(
         else ""
     )
     return (
-        f"{shell_arg(cli_bin)} --format json heartbeat-prompt --{shell_arg(body)} "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"--format json heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}"
     )

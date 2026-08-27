@@ -30,6 +30,7 @@ def _legacy_future_primary_status() -> dict:
         claimed_by=AGENT_ID,
         required_capabilities=["fallback_runner"],
         required_write_scopes=["artifacts/fallback/**"],
+        note="Start from the independent fallback validation boundary.",
     )
     primary = quota_todo_item(
         todo_id=PRIMARY_ID,
@@ -38,6 +39,7 @@ def _legacy_future_primary_status() -> dict:
         title="Run the Monday-only primary operation after its window opens.",
         claimed_by=AGENT_ID,
         action_kind="monitor",
+        note="Do not poll before the scheduled primary window.",
     )
     return quota_status_payload(
         goal_id=GOAL_ID,
@@ -124,12 +126,36 @@ def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> N
     assert compact["action_portfolio"]["selection_policy"] == (
         portfolio["selection_policy"]
     )
-    assert compact["action_portfolio"]["suggested_actions"] == [
-        {"todo_id": PRIMARY_ID, "selection_role": "recommended"},
-        {"todo_id": FALLBACK_ID, "selection_role": "alternative"},
+    compact_suggestions = compact["action_portfolio"]["suggested_actions"]
+    assert compact_suggestions == [
+        {
+            "todo_id": PRIMARY_ID,
+            "selection_role": "recommended",
+            "priority": "P0",
+            "action_kind": "monitor",
+            "text": "[P0] Run the Monday-only primary operation after its window opens.",
+            "continuation_hint": "Do not poll before the scheduled primary window.",
+        },
+        {
+            "todo_id": FALLBACK_ID,
+            "selection_role": "alternative",
+            "priority": "P2",
+            "text": "[P2] Advance the independent fallback slice.",
+            "continuation_hint": (
+                "Start from the independent fallback validation boundary."
+            ),
+        },
     ]
     assert compact["action_portfolio"]["suggested_action_details"] == {
-        "schema_version": "quota_cli_action_portfolio_compaction_v0",
+        "schema_version": "quota_cli_action_portfolio_compaction_v1",
+        "inlined_fields": [
+            "todo_id",
+            "selection_role",
+            "priority",
+            "action_kind",
+            "text",
+            "continuation_hint",
+        ],
         "ref": "$.agent_todo_summary.first_executable_items",
     }
     compact_candidates = compact["agent_todo_summary"]["first_executable_items"]
@@ -204,6 +230,79 @@ def test_typed_future_monitor_selects_ready_work_and_preserves_priority() -> Non
     assert unavailable[0]["todo_id"] == PRIMARY_ID
     assert unavailable[0]["availability_reason"] == "scheduled_for_future"
     assert unavailable[0]["next_due_at"] == "2099-01-01T00:00:00Z"
+
+
+def test_typed_external_wait_selects_ready_work_and_preserves_wait_context() -> None:
+    waiting = quota_todo_item(
+        todo_id=PRIMARY_ID,
+        index=1,
+        priority="P0",
+        title="Resume the validated slice after external state changes.",
+        claimed_by=AGENT_ID,
+        resume_when="monitor_changed:todo_monitor001",
+        resume_monitor_generation=4,
+        successor_todo_ids=[FALLBACK_ID],
+        note="Do not poll here; wait for the typed monitor transition.",
+    )
+    fallback = quota_todo_item(
+        todo_id=FALLBACK_ID,
+        index=2,
+        priority="P1",
+        title="Advance the independent fallback slice.",
+        claimed_by=AGENT_ID,
+        note="Implement the bounded fallback and run its focused validation.",
+    )
+    monitor = quota_todo_item(
+        todo_id="todo_monitor001",
+        index=3,
+        priority="P2",
+        title="Observe the external state for a material change.",
+        claimed_by=AGENT_ID,
+        task_class="continuous_monitor",
+        action_kind="monitor",
+        target_key="fixture-external-state",
+        cadence="daily",
+        next_due_at="2099-01-01T00:00:00Z",
+        watch_only=True,
+        material_change_generation=4,
+    )
+    status = quota_status_payload(
+        goal_id=GOAL_ID,
+        status="active",
+        agent_todo_items=[waiting, fallback, monitor],
+        recommended_action=waiting["text"],
+        next_action=waiting["text"],
+        coordination={
+            "agent_model": "peer_v1",
+            "registered_agents": [AGENT_ID],
+        },
+        claim_scope_agent_id=AGENT_ID,
+    )
+
+    packet = build_quota_should_run(
+        status,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert packet["selected_todo"]["todo_id"] == FALLBACK_ID
+    assert packet["recommended_action"] == fallback["text"]
+    unavailable = packet["action_portfolio"]["unavailable_higher_priority"]
+    assert unavailable[0]["todo_id"] == PRIMARY_ID
+    assert unavailable[0]["availability_reason"] == "resume_condition_pending"
+    wait_visibility = packet["agent_todo_summary"]["resume_blocked_items"][0]
+    assert wait_visibility["todo_id"] == PRIMARY_ID
+    assert wait_visibility["resume_ready"] is False
+    assert wait_visibility["resume_condition"]["baseline_generation"] == 4
+    assert wait_visibility["resume_condition"]["material_change_generation"] == 4
+
+    compact = compact_quota_should_run_cli_payload(packet)
+    selected_action = compact["action_portfolio"]["suggested_actions"][0]
+    assert selected_action["todo_id"] == FALLBACK_ID
+    assert selected_action["text"] == fallback["text"]
+    assert selected_action["continuation_hint"] == (
+        "Implement the bounded fallback and run its focused validation."
+    )
 
 
 def test_receipt_bound_turn_cannot_switch_to_a_fallback_todo() -> None:

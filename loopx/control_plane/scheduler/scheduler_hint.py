@@ -26,7 +26,7 @@ from .execution_context import (
 from .monitor_wait import (
     MONITOR_WAIT_HOST_FLOOR_MINUTES,
     MONITOR_WAIT_PHASE_RANK,  # noqa: F401  # re-exported for compatibility
-    MONITOR_WAIT_PROGRESSION_MINUTES,
+    MONITOR_WAIT_PROGRESSION_MINUTES,  # noqa: F401  # re-exported for compatibility
     MonitorWaitPhase,  # noqa: F401  # re-exported for compatibility
     _parse_monitor_timestamp,  # noqa: F401  # re-exported for compatibility
     build_monitor_wait_cadence_plan,
@@ -86,6 +86,8 @@ def build_projected_codex_app_automation_id(
     projected = re.sub(r"[^A-Za-z0-9._:-]", "-", raw)
     projected = re.sub(r"-+", "-", projected).strip("-")
     return projected[:128] or "loopx-fallback"
+
+
 SCHEDULER_FRONTIER_IDENTITY_KEYS = (
     "selected_todo.todo_id",
     "selected_todo.action_kind",
@@ -206,7 +208,9 @@ def _user_gate_notification_cooldown(
 
     if cadence_class != "human_gate" or not host_failure_suppressed:
         return None
-    failed_at = parse_scheduler_timestamp((recorded_host_failure or {}).get("failed_at"))
+    failed_at = parse_scheduler_timestamp(
+        (recorded_host_failure or {}).get("failed_at")
+    )
     host_interval = scheduler_rrule_interval_minutes(effective_host_rrule)
     target_interval = max(1, int(current_interval_minutes))
     if failed_at is None or host_interval is None or host_interval >= target_interval:
@@ -481,6 +485,7 @@ class _SchedulerHintBuilder:
         cadence_progression_override: list[int] | None = None,
         reset_profile_snapshot_override: dict[str, Any] | None = None,
         cadence_context_detail: dict[str, Any] | None = None,
+        notification_cooldown_interval_minutes: int | None = None,
         advance_same_identity: bool = True,
     ) -> dict[str, Any]:
         local_cadence_progression = cadence_progression_override or [
@@ -577,9 +582,7 @@ class _SchedulerHintBuilder:
         codex_goal_loop = {
             "unchanged_poll_limit": cli_limit,
             "after_limit": (
-                CODEX_NATIVE_GOAL_BLOCK_ACTION
-                if cli_limit is not None
-                else "continue"
+                CODEX_NATIVE_GOAL_BLOCK_ACTION if cli_limit is not None else "continue"
             ),
             "final_quota_replan_check": final_replan_check,
             "loopx_goal_state": "remains_active",
@@ -622,9 +625,7 @@ class _SchedulerHintBuilder:
         effective_host_rrule = backoff_decision.effective_host_rrule
         host_update_failures = list(backoff_decision.host_update_failures)
         recorded_host_failure = backoff_decision.recorded_host_failure
-        current_rrule_already_applied = (
-            backoff_decision.current_rrule_already_applied
-        )
+        current_rrule_already_applied = backoff_decision.current_rrule_already_applied
         apply_needed = host_decision.apply_needed
         ack_needed = host_decision.ack_needed
         host_match_ack_needed = host_decision.host_match_ack_needed
@@ -813,7 +814,11 @@ class _SchedulerHintBuilder:
         notification_cooldown = _user_gate_notification_cooldown(
             cadence_class=cadence_class,
             host_failure_suppressed=host_failure_suppressed,
-            current_interval_minutes=current_interval,
+            current_interval_minutes=(
+                notification_cooldown_interval_minutes
+                if notification_cooldown_interval_minutes is not None
+                else current_interval
+            ),
             effective_host_rrule=effective_host_rrule,
             recorded_host_failure=recorded_host_failure,
         )
@@ -852,6 +857,54 @@ class _SchedulerHintBuilder:
                 else None
             ),
         )
+
+
+def _monitor_bounded_wait_profile(
+    payload: dict[str, Any],
+    *,
+    cadence_class: str,
+    default_interval_minutes: int,
+    max_interval_minutes: int,
+) -> dict[str, Any]:
+    """Cap a wait profile to the tightest continuous-monitor wakeup."""
+
+    monitor_plan = build_monitor_wait_cadence_plan(
+        payload,
+        current_time=now_utc(),
+    )
+    monitor_progression = (
+        monitor_plan.get("progression_minutes")
+        if isinstance(monitor_plan, dict)
+        else None
+    )
+    progression = (
+        monitor_progression
+        if isinstance(monitor_progression, list) and monitor_progression
+        else None
+    )
+    initial_interval = int(progression[0]) if progression else default_interval_minutes
+    monitor_reset_profile = (
+        {
+            "cadence_class": cadence_class,
+            "codex_app_initial_interval_minutes": initial_interval,
+            "codex_app_initial_rrule": rrule_for_minutes(initial_interval),
+            "codex_app_max_interval_minutes": max_interval_minutes,
+            "unchanged_poll_backoff_multiplier": 2,
+            "local_scheduler_unchanged_poll_limit": 3,
+            "claude_code_loop_unchanged_poll_limit": 3,
+            **monitor_plan["reset_profile"],
+        }
+        if isinstance(monitor_plan, dict)
+        and isinstance(monitor_plan.get("reset_profile"), dict)
+        else None
+    )
+    return {
+        "codex_interval": initial_interval,
+        "codex_max": max_interval_minutes,
+        "cadence_progression_override": progression,
+        "reset_profile_snapshot_override": monitor_reset_profile,
+        "cadence_context_detail": monitor_plan,
+    }
 
 
 def build_scheduler_hint(
@@ -1027,17 +1080,13 @@ def build_scheduler_hint(
                 "explicit peer coordination has no executable peer lane or local "
                 "fallback; recurring polling must stop until its inputs change"
             ),
-            spend_policy=(
-                "no quota spend while explicit peer coordination is blocked"
-            ),
+            spend_policy=("no quota spend while explicit peer coordination is blocked"),
             resume_trigger=(
                 "peer activation capability, peer runtime readiness, coordinator "
                 "configuration, or newly projected local work"
             ),
             ssh_goal_runtime_action="return_to_owner",
-            unchanged_spend_policy=(
-                "no quota spend for blocked coordination stop"
-            ),
+            unchanged_spend_policy=("no quota spend for blocked coordination stop"),
         )
 
     builder = _SchedulerHintBuilder(
@@ -1083,6 +1132,12 @@ def build_scheduler_hint(
         return result
 
     if arbitration.disposition == SchedulerDisposition.HUMAN_GATE:
+        human_gate_profile = _monitor_bounded_wait_profile(
+            payload,
+            cadence_class="human_gate",
+            default_interval_minutes=30,
+            max_interval_minutes=120,
+        )
         return builder.build(
             action="backoff_waiting_for_user",
             cadence_class="human_gate",
@@ -1090,10 +1145,10 @@ def build_scheduler_hint(
                 "user/controller action is the next unlock; surface the concrete "
                 "gate once, then stop repeating the same quiet poll"
             ),
-            codex_interval=30,
-            codex_max=120,
             cli_limit=3,
             claude_limit=3,
+            notification_cooldown_interval_minutes=30,
+            **human_gate_profile,
         )
 
     if arbitration.disposition == SchedulerDisposition.ACTIVE_WORK:
@@ -1154,34 +1209,11 @@ def build_scheduler_hint(
         )
 
     if arbitration.disposition == SchedulerDisposition.MONITOR_WAIT:
-        monitor_plan = build_monitor_wait_cadence_plan(
+        monitor_profile = _monitor_bounded_wait_profile(
             payload,
-            current_time=now_utc(),
-        )
-        monitor_progression = (
-            monitor_plan.get("progression_minutes")
-            if isinstance(monitor_plan, dict)
-            else None
-        )
-        monitor_initial_interval = (
-            monitor_progression[0]
-            if isinstance(monitor_progression, list) and monitor_progression
-            else MONITOR_WAIT_HOST_FLOOR_MINUTES
-        )
-        monitor_reset_profile = (
-            {
-                "cadence_class": "monitor_wait",
-                "codex_app_initial_interval_minutes": monitor_initial_interval,
-                "codex_app_initial_rrule": rrule_for_minutes(monitor_initial_interval),
-                "codex_app_max_interval_minutes": 60,
-                "unchanged_poll_backoff_multiplier": 2,
-                "local_scheduler_unchanged_poll_limit": 3,
-                "claude_code_loop_unchanged_poll_limit": 3,
-                **monitor_plan["reset_profile"],
-            }
-            if isinstance(monitor_plan, dict)
-            and isinstance(monitor_plan.get("reset_profile"), dict)
-            else None
+            cadence_class="monitor_wait",
+            default_interval_minutes=MONITOR_WAIT_HOST_FLOOR_MINUTES,
+            max_interval_minutes=60,
         )
         return builder.build(
             action="backoff_until_material_transition",
@@ -1190,15 +1222,9 @@ def build_scheduler_hint(
                 "monitor-only quiet polls should remain alive but use a slower "
                 "cadence until material evidence, a blocker, or replan obligation appears"
             ),
-            codex_interval=monitor_initial_interval,
-            codex_max=60,
             cli_limit=3,
             claude_limit=3,
-            cadence_progression_override=(
-                monitor_progression or MONITOR_WAIT_PROGRESSION_MINUTES
-            ),
-            reset_profile_snapshot_override=monitor_reset_profile,
-            cadence_context_detail=monitor_plan,
+            **monitor_profile,
         )
 
     if arbitration.disposition == SchedulerDisposition.QUIET_WAIT:

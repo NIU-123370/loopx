@@ -29,6 +29,7 @@ def _resolve(**overrides: Any) -> QuotaRunDecision:
         "replan_obligation": None,
         "goal_health_ok": True,
         "inbox_reply_due": False,
+        "inbox_material_review_due": False,
         "agent_frontier_id": "agent-a",
         "registered_agent_ids": ["agent-a"],
         "goal_frontier_projection": None,
@@ -82,6 +83,18 @@ def test_inbox_reply_prevents_replan_and_precedes_normal_delivery() -> None:
     assert decision.should_run is True
     assert decision.normal_delivery_allowed is True
     assert decision.effective_action == "lark_inbox_reply_due"
+
+
+def test_material_review_prevents_replan_without_claiming_reply_due() -> None:
+    decision = _resolve(
+        replan_obligation={"required": True, "agent_id": "agent-a"},
+        inbox_material_review_due=True,
+    )
+
+    assert decision.should_run is True
+    assert decision.normal_delivery_allowed is True
+    assert decision.effective_action == "operator_inbox_material_review_due"
+    assert decision.replan_decision_allowed is False
 
 
 def test_replan_precedes_normal_delivery() -> None:

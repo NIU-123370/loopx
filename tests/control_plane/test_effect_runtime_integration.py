@@ -491,6 +491,72 @@ def test_early_runtime_exit_surfaces_stable_startup_diagnostic(
     assert launch["close_fds"] is True
 
 
+@pytest.mark.parametrize(
+    ("retry_safe", "successful_attempt", "expected_attempts"),
+    [
+        (False, None, 1),
+        (True, None, 2),
+        (True, 2, 2),
+    ],
+)
+def test_request_startup_retry_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    retry_safe: bool,
+    successful_attempt: int | None,
+    expected_attempts: int,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    attempts = {"count": 0}
+    ready_info = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+        "fingerprint": effect_runtime._runtime_fingerprint(),
+        "pid": os.getpid(),
+        "host": "127.0.0.1",
+        "port": 1,
+        "token": "fixture-token",
+    }
+
+    def start_runtime(*, fingerprint: str, info_path: Path):
+        attempts["count"] += 1
+        assert fingerprint == ready_info["fingerprint"]
+        assert info_path.parent == runtime_dir
+        if attempts["count"] == successful_attempt:
+            return ready_info
+        raise effect_runtime.EffectRuntimeStartupError(
+            "runtime exited before ready",
+            diagnostic_code="runtime_exited_before_ready",
+        )
+
+    monkeypatch.setattr(effect_runtime, "_start_runtime", start_runtime)
+    monkeypatch.setattr(
+        effect_runtime,
+        "_request_with_info",
+        lambda info, **_kwargs: {"result": {"pid": info["pid"]}},
+    )
+
+    if successful_attempt is not None:
+        assert effect_runtime.effect_runtime_result(
+            "runtime.ping",
+            {},
+            retry_safe=retry_safe,
+        ) == {"pid": os.getpid()}
+    else:
+        with pytest.raises(
+            effect_runtime.EffectRuntimeStartupError,
+            match="runtime exited before ready",
+        ) as exc_info:
+            effect_runtime.effect_runtime_result(
+                "turn_journal.write",
+                {},
+                retry_safe=retry_safe,
+            )
+        assert exc_info.value.diagnostic_code == "runtime_exited_before_ready"
+
+    assert attempts["count"] == expected_attempts
+
+
 def test_managed_runtime_releases_memory_after_idle_timeout(
     tmp_path: Path,
     monkeypatch,

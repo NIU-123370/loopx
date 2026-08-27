@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from ...domain_state import default_domain_state_file_path, upsert_domain_state_jsonl
+from .factorial_contrast import (
+    build_benchmark_factorial_contrasts,
+    build_benchmark_metric_delta,
+)
 
 BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION = "benchmark_experiment_board_row_v0"
 BENCHMARK_EXPERIMENT_BOARD_SCHEMA_VERSION = "benchmark_experiment_board_v0"
@@ -597,50 +601,6 @@ def preview_benchmark_experiment_board_reconcile(
     return [result_by_key[key] for key in ordered_keys], counts
 
 
-def _metric_delta(
-    baseline: Mapping[str, Any], candidate: Mapping[str, Any]
-) -> dict[str, Any]:
-    delta = float(candidate["value"]) - float(baseline["value"])
-    result: dict[str, Any] = {
-        "baseline_value": baseline["value"],
-        "candidate_value": candidate["value"],
-        "delta": delta,
-    }
-    baseline_total = baseline.get("total")
-    candidate_total = candidate.get("total")
-    if (
-        isinstance(baseline_total, (int, float))
-        and not isinstance(baseline_total, bool)
-        and baseline_total > 0
-        and isinstance(candidate_total, (int, float))
-        and not isinstance(candidate_total, bool)
-        and candidate_total > 0
-    ):
-        baseline_rate = float(baseline["value"]) / float(baseline_total)
-        candidate_rate = float(candidate["value"]) / float(candidate_total)
-        result.update(
-            {
-                "baseline_total": baseline_total,
-                "candidate_total": candidate_total,
-                "baseline_rate": baseline_rate,
-                "candidate_rate": candidate_rate,
-                "delta_rate": candidate_rate - baseline_rate,
-            }
-        )
-    higher_is_better = candidate.get("higher_is_better")
-    if (
-        isinstance(higher_is_better, bool)
-        and baseline.get("higher_is_better") == higher_is_better
-    ):
-        if delta == 0:
-            result["direction"] = "flat"
-        elif (delta > 0) == higher_is_better:
-            result["direction"] = "improved"
-        else:
-            result["direction"] = "regressed"
-    return result
-
-
 def _build_comparison(
     candidate: Mapping[str, Any], anchor: Mapping[str, Any] | None
 ) -> dict[str, Any]:
@@ -678,7 +638,7 @@ def _build_comparison(
         anchor_metrics = anchor.get("metrics", {})
         candidate_metrics = candidate.get("metrics", {})
         for name in sorted(set(anchor_metrics) & set(candidate_metrics)):
-            metric_deltas[name] = _metric_delta(
+            metric_deltas[name] = build_benchmark_metric_delta(
                 anchor_metrics[name], candidate_metrics[name]
             )
 
@@ -751,6 +711,7 @@ def build_benchmark_experiment_board(
     *,
     benchmark_id: str | None = None,
     study_id: str | None = None,
+    four_arm_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized = [normalize_benchmark_experiment_board_row(dict(row)) for row in rows]
     if benchmark_id is not None:
@@ -762,6 +723,12 @@ def build_benchmark_experiment_board(
         study_filter = _token(study_id, field="study_id")
         normalized = [row for row in normalized if row["study_id"] == study_filter]
     normalized.sort(key=_row_sort_key)
+
+    factorial_contrasts = (
+        build_benchmark_factorial_contrasts(normalized, four_arm_contract)
+        if four_arm_contract is not None
+        else []
+    )
 
     by_run_id = {row["run_id"]: row for row in normalized}
     comparisons = [
@@ -810,6 +777,12 @@ def build_benchmark_experiment_board(
             "matched_pair_countable_count": sum(
                 1 for item in comparisons if item["matched_pair_countable"]
             ),
+            "factorial_contrast_count": len(factorial_contrasts),
+            "factorial_contrast_countable_count": sum(
+                1
+                for item in factorial_contrasts
+                if item["factorial_contrast_countable"]
+            ),
             "arm_role_counts": role_counts,
             "comparison_arm_role_counts": comparison_arm_role_counts,
             "comparison_claim_scope_counts": comparison_claim_scope_counts,
@@ -819,6 +792,7 @@ def build_benchmark_experiment_board(
         },
         "runs": normalized,
         "comparisons": comparisons,
+        "factorial_contrasts": factorial_contrasts,
         "agent_guidance": {
             "required_sequence": [
                 "read_board_before_launch_or_case_selection",
@@ -832,7 +806,9 @@ def build_benchmark_experiment_board(
             ),
             "claim_boundary": (
                 "Only matched_pair_countable comparisons support paired claims; "
-                "diagnostic_only explore rows remain a separate evidence lane."
+                "only factorial_contrast_countable projections support conditional "
+                "effects or difference-in-differences; diagnostic_only explore rows "
+                "remain a separate evidence lane."
             ),
             "next_action": (
                 "upsert_first_run_row"
@@ -895,6 +871,7 @@ def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> st
         f"- Cases: `{summary.get('case_count', 0)}`",
         f"- Score-countable runs: `{summary.get('score_countable_run_count', 0)}`",
         f"- Countable matched comparisons: `{summary.get('matched_pair_countable_count', 0)}`",
+        f"- Countable factorial contrasts: `{summary.get('factorial_contrast_countable_count', 0)}`",
         f"- Countable matched-study comparisons: `{matched_study_counts.get('matched_pair_countable', 0)}`",
         f"- Countable diagnostic-only comparisons: `{diagnostic_counts.get('matched_pair_countable', 0)}`",
         "",
@@ -990,6 +967,53 @@ def render_benchmark_experiment_board_markdown(payload: Mapping[str, Any]) -> st
         )
     if not payload.get("comparisons"):
         lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+
+    lines.extend(
+        [
+            "",
+            "## Factorial Contrasts",
+            "",
+            "| Case | Primary interaction | Countable | Reasons |",
+            "| --- | ---: | --- | --- |",
+        ]
+    )
+    for item in payload.get("factorial_contrasts", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        interaction = (
+            item.get("interaction_contrast")
+            if isinstance(item.get("interaction_contrast"), Mapping)
+            else {}
+        )
+        metrics = (
+            interaction.get("metric_contrasts")
+            if isinstance(interaction.get("metric_contrasts"), Mapping)
+            else {}
+        )
+        primary = metrics.get(item.get("primary_metric"))
+        interaction_value = (
+            primary.get("difference_in_differences")
+            if isinstance(primary, Mapping)
+            else "n/a"
+        )
+        reasons = (
+            ", ".join(str(value) for value in item.get("reason_codes", []) or [])
+            or "none"
+        )
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(item.get("case_id")),
+                    str(interaction_value),
+                    str(item.get("factorial_contrast_countable")),
+                    reasons,
+                ]
+            )
+            + " |"
+        )
+    if not payload.get("factorial_contrasts"):
+        lines.append("| n/a | n/a | n/a | n/a |")
 
     guidance = (
         payload.get("agent_guidance")

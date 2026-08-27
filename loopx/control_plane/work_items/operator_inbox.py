@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -28,6 +28,8 @@ class OperatorInboxSourceContract:
     operator_display_name_field: str
     destination_field: str
     destination_pattern: re.Pattern[str]
+    attachment_count_field: str
+    addressed_flag_field: str | None = None
 
 
 def _safe_inbox_path(project: Path, raw_path: object) -> Path:
@@ -50,7 +52,7 @@ def _safe_inbox_path(project: Path, raw_path: object) -> Path:
 def _read_mapping(path: Path) -> Mapping[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
-        raise ValueError(f"operator inbox JSON must be an object: {path.name}")
+        raise TypeError(f"operator inbox JSON must be an object: {path.name}")
     return payload
 
 
@@ -83,33 +85,44 @@ def _pending_events(
             continue
         try:
             payload = _read_mapping(path)
-        except (OSError, ValueError, json.JSONDecodeError):
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
             continue
         message_id = str(payload.get("message_id") or "").strip()
         event_id = str(payload.get("event_id") or message_id).strip()
         parent_id = str(payload.get("parent_id") or "").strip()
         content = " ".join(str(payload.get("content") or "").split())[:1200]
+        raw_attachment_count = payload.get(source_contract.attachment_count_field, 0)
+        if (
+            isinstance(raw_attachment_count, bool)
+            or not isinstance(raw_attachment_count, int)
+            or not 0 <= raw_attachment_count <= 50
+        ):
+            continue
+        attachment_count = raw_attachment_count
         if (
             payload.get("schema_version") != source_contract.event_schema_version
             or not source_contract.message_id_pattern.fullmatch(message_id)
             or not source_contract.event_id_pattern.fullmatch(event_id)
-            or not content
+            or (not content and attachment_count == 0)
         ):
             continue
-        events.setdefault(
-            message_id,
-            {
-                "message_id": message_id,
-                "create_time": str(payload.get("create_time") or "")[:40],
-                "content": content,
-                "reply_context_verified": payload.get("reply_context_verified") is True,
-                "reply_to_operator": bool(
-                    payload.get("reply_context_verified") is True
-                    and source_contract.message_id_pattern.fullmatch(parent_id)
-                    and payload.get(source_contract.reply_flag_field) is True
-                ),
-            },
-        )
+        event = {
+            "message_id": message_id,
+            "create_time": str(payload.get("create_time") or "")[:40],
+            "content": content,
+            "attachment_count": attachment_count,
+            "reply_context_verified": payload.get("reply_context_verified") is True,
+            "reply_to_operator": bool(
+                payload.get("reply_context_verified") is True
+                and source_contract.message_id_pattern.fullmatch(parent_id)
+                and payload.get(source_contract.reply_flag_field) is True
+            ),
+        }
+        if source_contract.addressed_flag_field is not None:
+            event["addressed_to_operator"] = bool(
+                payload.get(source_contract.addressed_flag_field) is True
+            )
+        events.setdefault(message_id, event)
     return [
         event for message_id, event in events.items() if message_id not in processed
     ]
@@ -124,16 +137,16 @@ def _parse_event_time(value: object) -> datetime | None:
         if number > 10_000_000_000:
             number //= 1000
         try:
-            return datetime.fromtimestamp(number, tz=timezone.utc)
+            return datetime.fromtimestamp(number, tz=UTC)
         except (OverflowError, OSError, ValueError):
             return None
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def operator_inbox_attention_kind(
@@ -147,6 +160,8 @@ def operator_inbox_attention_kind(
         and event.get("reply_to_operator") is True
     ):
         return "reply_to_operator"
+    typed_addressing = "addressed_to_operator" in event
+    addressed_to_operator = event.get("addressed_to_operator") is True
     content = str(event.get("content") or "")
     folded = content.casefold()
     operator_name = " ".join(operator_display_name.split()).casefold()
@@ -154,11 +169,19 @@ def operator_inbox_attention_kind(
         operator_name and "@" in content and operator_name in folded
     )
     loopx_mention = "@" in content and "loopx" in folded
-    if capture_scope != "addressed_only" and not explicit_mention and not loopx_mention:
+    if typed_addressing:
+        # A configured-chat source must prove addressing at its provider
+        # normalization boundary.  Missing/false evidence stays material-only;
+        # the control plane must not guess from unrelated @mentions or prose.
+        if capture_scope != "addressed_only" and not addressed_to_operator:
+            return None
+    elif (
+        capture_scope != "addressed_only" and not explicit_mention and not loopx_mention
+    ):
         return None
     if QUESTION_SIGNAL_PATTERN.search(content):
         return "direct_question"
-    if explicit_mention or loopx_mention:
+    if addressed_to_operator or explicit_mention or loopx_mention:
         return "direct_mention"
     return None
 
@@ -207,6 +230,24 @@ def project_operator_inbox_urgency(
         raise ValueError(
             "enabled operator inbox reply does not satisfy its source contract"
         )
+    material_review = config.get("material_review")
+    if material_review is not None and not isinstance(material_review, Mapping):
+        raise ValueError("operator inbox material_review config must be an object")
+    material_review = (
+        material_review if isinstance(material_review, Mapping) else {}
+    )
+    material_review_enabled = material_review.get("enabled") is True
+    raw_drain_limit = material_review.get("drain_limit", 20)
+    if (
+        isinstance(raw_drain_limit, bool)
+        or not isinstance(raw_drain_limit, int)
+        or not 1 <= raw_drain_limit <= 100
+    ):
+        raise ValueError("operator inbox material_review drain_limit is invalid")
+    if material_review_enabled and capture_scope != "configured_chat_all":
+        raise ValueError(
+            "operator inbox material_review requires configured_chat_all capture"
+        )
     if not enabled:
         return {
             "schema_version": OPERATOR_INBOX_URGENCY_SCHEMA_VERSION,
@@ -217,6 +258,10 @@ def project_operator_inbox_urgency(
             "reply_to_operator_count": 0,
             "attention_required_count": 0,
             "reply_due": False,
+            "material_review_count": 0,
+            "material_attachment_count": 0,
+            "material_review_due": False,
+            "material_review_drain_limit": raw_drain_limit,
             "local_private_content_returned": False,
         }
 
@@ -239,13 +284,23 @@ def project_operator_inbox_urgency(
     attention_required_count = (
         direct_question_count + direct_mention_count + reply_to_operator_count
     )
+    material_review_events = [
+        event
+        for event, kind in zip(pending, kinds, strict=True)
+        if kind is None
+    ]
+    material_review_count = len(material_review_events)
+    material_attachment_count = sum(
+        int(event.get("attachment_count") or 0)
+        for event in material_review_events
+    )
     parsed_times = [
         parsed
         for event in pending
         if (parsed := _parse_event_time(event.get("create_time"))) is not None
     ]
     oldest = min(parsed_times) if parsed_times else None
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
     return {
         "schema_version": OPERATOR_INBOX_URGENCY_SCHEMA_VERSION,
         "enabled": True,
@@ -260,5 +315,11 @@ def project_operator_inbox_urgency(
             max(0, int((current - oldest).total_seconds())) if oldest else None
         ),
         "reply_due": bool(attention_required_count > 0 and reply_enabled),
+        "material_review_count": material_review_count,
+        "material_attachment_count": material_attachment_count,
+        "material_review_due": bool(
+            material_review_enabled and material_review_count > 0
+        ),
+        "material_review_drain_limit": raw_drain_limit,
         "local_private_content_returned": False,
     }

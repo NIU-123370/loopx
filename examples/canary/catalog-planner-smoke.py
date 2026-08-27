@@ -721,7 +721,7 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
     assert runtime_connector_profile["deep_checks_included"] is False, runtime_connector_profile
 
     auto_research_payload = build_catalog_canary_plan(
-        changed_files=["loopx/capabilities/auto_research/core.py"],
+        changed_files=["demo/auto_research/core.py"],
         surfaces=["auto-research demo frontier visible launcher"],
     )
     auto_research_profiles = {

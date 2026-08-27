@@ -3,7 +3,34 @@ from __future__ import annotations
 import json
 import subprocess
 
-from loopx.extensions.lark.event_collector_runtime import _run_json_with_status
+from loopx.extensions.lark.event_collector_runtime import (
+    _run_json_with_status,
+    lark_event_requires_reply_context_lookup,
+)
+
+
+def test_reply_context_lookup_does_not_trust_unrelated_text_mentions() -> None:
+    bot_name = "Context Bot"
+
+    assert lark_event_requires_reply_context_lookup(
+        {"content": "@Alice can LoopX handle this?"},
+        bot_display_name=bot_name,
+    )
+    assert lark_event_requires_reply_context_lookup(
+        {
+            "content": "@Alice can LoopX handle this?",
+            "mentions": [{"name": "Alice"}],
+            "mentioned": False,
+        },
+        bot_display_name=bot_name,
+    )
+    assert not lark_event_requires_reply_context_lookup(
+        {
+            "mentions": [{"name": bot_name}],
+            "mentioned": True,
+        },
+        bot_display_name=bot_name,
+    )
 
 
 def test_json_status_reads_nested_provider_code_from_stderr() -> None:

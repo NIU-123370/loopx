@@ -6,7 +6,6 @@ from ..effect_program import ReceiptBoundMonitorPhase
 from ..todos.contract import TODO_TASK_CLASS_MONITOR, normalize_todo_id
 from ..todos.projection import todo_priority_label, todo_priority_rank
 
-
 WORK_LANE_CONTRACT_SCHEMA_VERSION = "work_lane_contract_v1"
 WORK_LANE_RECEIPT_BOUND_MONITOR_SETTLEMENT_OBLIGATION = (
     "settle_receipt_bound_monitor"
@@ -24,6 +23,9 @@ WORK_LANE_EXTERNAL_EVIDENCE_OBSERVATION_OBLIGATION = (
     "observe_external_evidence_or_blocker"
 )
 WORK_LANE_LARK_INBOX_REPLY_DUE_OBLIGATION = "drain_lark_inbox_reply_due"
+WORK_LANE_OPERATOR_INBOX_MATERIAL_REVIEW_DUE_OBLIGATION = (
+    "drain_operator_inbox_material_review_due"
+)
 WORK_LANE_TODO_MONITOR_DUE_KIND = "todo_monitor_due"
 
 
@@ -64,9 +66,7 @@ def due_monitor_can_preempt_advancement(item: dict[str, Any]) -> bool:
     if any(hint in action_kind for hint in PRIVATE_BOUNDARY_MONITOR_ACTION_KIND_HINTS):
         return False
     priority = str(todo_priority_label(item) or "").strip().upper()
-    if "LOCAL" in priority:
-        return False
-    return True
+    return "LOCAL" not in priority
 
 
 def due_monitor_preempts_advancement(
@@ -104,6 +104,8 @@ def work_lane_contract_requires_current_agent_attempt(
     if obligation in WORK_LANE_CURRENT_AGENT_MONITOR_REPAIR_OBLIGATIONS:
         return True
     if obligation == WORK_LANE_LARK_INBOX_REPLY_DUE_OBLIGATION:
+        return True
+    if obligation == WORK_LANE_OPERATOR_INBOX_MATERIAL_REVIEW_DUE_OBLIGATION:
         return True
     return bool(
         obligation == WORK_LANE_EXTERNAL_EVIDENCE_OBSERVATION_OBLIGATION
@@ -252,6 +254,17 @@ def work_lane_contract_is_lark_inbox_reply_due(
     )
 
 
+def work_lane_contract_is_operator_inbox_material_review_due(
+    contract: dict[str, Any] | None,
+) -> bool:
+    return bool(
+        isinstance(contract, dict)
+        and contract.get("obligation")
+        == WORK_LANE_OPERATOR_INBOX_MATERIAL_REVIEW_DUE_OBLIGATION
+        and contract.get("must_attempt_work") is True
+    )
+
+
 def work_lane_contract_is_receipt_bound_monitor_settled(
     contract: dict[str, Any] | None,
 ) -> bool:
@@ -308,12 +321,88 @@ def lark_inbox_reply_due_work_lane_contract(
         ),
         "oldest_pending_age_seconds": urgency.get("oldest_pending_age_seconds"),
         "drain_command": inbox.get("drain_command"),
+        "semantic_triage_required": True,
+        "allowed_dispositions": [
+            "steer_current_turn",
+            "replan_goal",
+            "record_context",
+            "continue_current_work",
+        ],
         "monitor_policy": "durable_effect_then_one_verified_reply_then_ack",
         "action": (
-            "drain the configured Lark inbox before ordinary work; translate the "
-            "direct question, mention, or verified bot reply into a durable effect, "
-            "send exactly one "
+            "drain and read the configured Lark inbox before ordinary work; classify "
+            "the direct question, mention, or verified bot reply as steering, Goal "
+            "replan, context capture, or continue-current-work; commit any required "
+            "durable effect, then send exactly one "
             "source-thread reply with idempotency and readback, then ACK"
+        ),
+    }
+
+
+def operator_inbox_material_review_due_work_lane_contract(
+    goal_boundary: dict[str, Any] | None,
+    *,
+    current_contract: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Schedule bounded review of captured material that does not require a reply."""
+
+    if not isinstance(goal_boundary, dict):
+        return current_contract
+    capabilities = goal_boundary.get("capabilities")
+    capabilities = capabilities if isinstance(capabilities, dict) else {}
+    inbox = capabilities.get("lark_event_inbox")
+    inbox = inbox if isinstance(inbox, dict) else {}
+    urgency = inbox.get("urgency")
+    urgency = urgency if isinstance(urgency, dict) else {}
+    if urgency.get("material_review_due") is not True:
+        return current_contract
+    drain_limit = max(
+        1,
+        min(int(urgency.get("material_review_drain_limit") or 20), 100),
+    )
+    drain_command = str(inbox.get("drain_command") or "").strip()
+    if drain_command and " --limit " not in f" {drain_command} ":
+        drain_command = f"{drain_command} --limit {drain_limit}"
+    return {
+        "schema_version": WORK_LANE_CONTRACT_SCHEMA_VERSION,
+        "lane": "operator_inbox_material_review",
+        "next_lane": (
+            str(current_contract.get("lane") or "advancement_task")
+            if isinstance(current_contract, dict)
+            else "advancement_task"
+        ),
+        "obligation": WORK_LANE_OPERATOR_INBOX_MATERIAL_REVIEW_DUE_OBLIGATION,
+        "must_attempt_work": True,
+        "priority_preemption": True,
+        "reason_codes": [
+            "operator_inbox_material_review_due",
+            "captured_unaddressed_material",
+        ],
+        "pending_count": max(0, int(urgency.get("pending_count") or 0)),
+        "material_review_count": max(
+            0, int(urgency.get("material_review_count") or 0)
+        ),
+        "material_attachment_count": max(
+            0, int(urgency.get("material_attachment_count") or 0)
+        ),
+        "drain_limit": drain_limit,
+        "drain_command": drain_command or None,
+        "semantic_triage_required": True,
+        "allowed_dispositions": [
+            "steer_current_turn",
+            "replan_goal",
+            "record_context",
+            "continue_current_work",
+            "no_follow_up",
+        ],
+        "monitor_policy": "bounded_effect_or_no_follow_up_receipt_then_ack",
+        "action": (
+            f"drain and read at most {drain_limit} captured operator-inbox materials "
+            "before ordinary work; classify each as steering, Goal replan, context "
+            "capture, continue-current-work, or no-follow-up; write the matching "
+            "durable effect or explicit no-follow-up receipt, settle it idempotently, "
+            "and ACK; "
+            "do not send a reply unless a separate reply_due item requires one"
         ),
     }
 

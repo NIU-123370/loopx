@@ -6,7 +6,13 @@ from pathlib import Path
 
 from examples.control_plane.quota_plan_fixtures import SCOPED_AGENT_ID, write_cli_fixture
 from loopx.cli_commands import quota as quota_command
+from loopx.cli_commands import quota_scheduler_followup
 from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
+from loopx.control_plane.scheduler.state import (
+    build_scheduler_state,
+    scheduler_state_path,
+    write_scheduler_state,
+)
 from loopx.status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
 
 
@@ -96,6 +102,69 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     assert settled_app["host_action"] == "none"
 
 
+def test_scheduler_ack_current_resets_stale_identity_from_matching_host(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "fixture-thread")
+    _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
+
+    first = _quota(registry_path, runtime_root, project)
+    first_app = first["scheduler_hint"]["codex_app"]
+    target_rrule = first_app["recommended_rrule"]
+    _write_heartbeat_rrule(codex_home, target_rrule)
+    stale_state = build_scheduler_state(
+        goal_id=GOAL_ID,
+        agent_id=SCOPED_AGENT_ID,
+        reset_token="stale-reset-token",
+        identity_signature="stale-identity-signature",
+        progression_index=0,
+        progression_minutes=first_app["example_progression_minutes"],
+        last_applied_rrule=target_rrule,
+        updated_at="2026-08-26T00:00:00+00:00",
+        source="test_scheduler_ack_current_stale_identity",
+    )
+    write_scheduler_state(
+        runtime_root,
+        stale_state,
+        goal_id=GOAL_ID,
+        agent_id=SCOPED_AGENT_ID,
+    )
+
+    reset = _quota(registry_path, runtime_root, project)
+    reset_app = reset["scheduler_hint"]["codex_app"]
+    reset_backoff = reset_app["stateful_backoff"]
+    assert reset_backoff["state_status"] == "reset_required"
+    assert reset_backoff["apply_needed"] is False
+    assert reset_backoff["ack_needed"] is True
+    assert reset_backoff["host_observation"]["status"] == "matches_recommended"
+
+    ack = run_json_cli(
+        *reset_app["ack_hint"]["cli_args"],
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["scheduler_ack_event"]["scheduler_state"]["reset_token"] == (
+        reset_backoff["reset_token"]
+    )
+
+    settled = _quota(registry_path, runtime_root, project)
+    settled_backoff = settled["scheduler_hint"]["codex_app"][
+        "stateful_backoff"
+    ]
+    assert settled_backoff["state_status"] == "same_identity"
+    assert settled_backoff["apply_needed"] is False
+    assert settled_backoff["ack_needed"] is False
+
+
 def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) -> None:
     registry_path, runtime_root, project = write_cli_fixture(
         tmp_path / "fixture",
@@ -133,8 +202,61 @@ def test_quota_should_run_ignores_cross_agent_scheduler_state(tmp_path: Path) ->
     assert app["stateful_backoff"]["apply_needed"] is True
 
 
-def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) -> None:
+def test_scheduler_fail_current_rejects_missing_turn_receipt_without_state_write(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+    state_path = scheduler_state_path(
+        runtime_root,
+        goal_id=GOAL_ID,
+        agent_id=SCOPED_AGENT_ID,
+    )
+
+    returncode, payload = run_json_cli_result(
+        "quota",
+        "scheduler-fail-current",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--turn-instance-id",
+        "heartbeat-missing-receipt",
+        "--failed-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--codex-app",
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+
+    assert returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "heartbeat_receipt_missing"
+    assert payload["state"] == "blocked_receipt"
+    assert payload["error_code"] == ("SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING")
+    assert payload["write_performed"] is False
+    assert payload["scheduler_state_mutated"] is False
+    assert payload["quota_spend_performed"] is False
+    assert not state_path.exists()
+
+
+def test_scheduler_ack_collects_the_periodic_should_run_lookback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     seen: dict[str, object] = {}
+
+    runtime_root = tmp_path / "runtime"
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry_path.parent.mkdir()
+    registry_path.write_text(
+        json.dumps({"common_runtime_root": str(runtime_root), "goals": []}),
+        encoding="utf-8",
+    )
 
     def fake_collect_status(**kwargs):
         seen["limit"] = kwargs.get("limit")
@@ -150,9 +272,18 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) ->
         seen["output_format"] = output_format
         seen["renderer"] = renderer
 
+    def fake_build_lark_projector(*, runtime_root_arg):
+        seen["lark_runtime_root"] = runtime_root_arg
+        return lambda **_kwargs: {}
+
     monkeypatch.setattr(quota_command, "collect_status", fake_collect_status)
     monkeypatch.setattr(
         quota_command,
+        "build_lark_operator_inbox_urgency_projector",
+        fake_build_lark_projector,
+    )
+    monkeypatch.setattr(
+        quota_scheduler_followup,
         "record_quota_scheduler_ack",
         fake_record_quota_scheduler_ack,
     )
@@ -198,7 +329,7 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) ->
 
     result = quota_command.handle_quota_command(
         args,
-        registry_path=Path(".loopx/registry.json"),
+        registry_path=registry_path,
         runtime_root_arg=None,
         print_payload=fake_print_payload,
         append_cli_rollout_event=lambda **_: {},
@@ -206,6 +337,7 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(monkeypatch) ->
 
     assert result == 0
     assert seen["limit"] == AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
+    assert seen["lark_runtime_root"] == runtime_root
     assert seen["payload"] == {
         "ok": True,
         "mode": "scheduler-ack",

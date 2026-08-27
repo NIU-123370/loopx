@@ -37,7 +37,7 @@ title = "Lark event inbox"
 status = "active-preview"
 visibility = "public"
 real_world_anchor = "host-collected project feedback from a configured Lark chat"
-user_value = "Collect, inspect, reply to, and acknowledge bounded Lark feedback without making chat the control-plane source of truth."
+user_value = "Collect live feedback, reconcile bounded group history, inspect link evidence, reply, and acknowledge without making chat the control-plane source of truth."
 entry_command = "loopx lark-inbox drain --goal-id <goal-id>"
 next_real_step = "Install and explicitly enable the bundled provider before configuring a project inbox."
 

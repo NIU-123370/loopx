@@ -42,6 +42,7 @@ import {
   validateGovernedCapabilitySettlementCallback,
 } from "./governed_capability.ts";
 import { evaluateDeliveryWorkspaceCausality } from "./quota/settlement_workspace_causality.ts";
+import { evaluateQuotaSpendCommit } from "./quota/spend_commit.ts";
 import { evaluateDeliveryWorkspace } from "./agents/delivery_workspace.ts";
 import {
   interpretTurnJournal,
@@ -59,8 +60,12 @@ import {
 } from "./todos/completion_state.ts";
 import { reduceTodoCompletionTransaction } from "./todos/completion_transaction.ts";
 import { transitionTodoNextAction } from "./todos/next_action.ts";
+import {
+  evaluateTodoResumeConditions,
+  normalizeTodoResumeWhen,
+  planTodoExternalWaitTransition,
+} from "./todos/resume_condition.ts";
 import { evaluateSchedulerStateTransition } from "./scheduler/state_transition_rules.ts";
-import { evaluateSchedulerHeartbeatCommit } from "./scheduler/heartbeat_commit.ts";
 import {
   evaluateSchedulerStateOperation,
   loadSchedulerState,
@@ -75,13 +80,21 @@ import {
   projectReplanSettlementContract,
   projectTodoLifecycleSettlementReentry,
 } from "./work_items/replan_settlement.ts";
+import { reduceTaskLeaseAcquire } from "./work_items/task_lease_settlement.ts";
 import {
   projectQuotaActionPortfolio,
   qualifyActionSelection,
 } from "./work_items/action_portfolio.ts";
+import { projectQuotaPlanningHorizon } from "./work_items/planning_horizon.ts";
+import {
+  projectTodoPlanningInventory,
+  projectTodoPlanningInventoryDetail,
+} from "./work_items/planning_inventory.ts";
 import {
   validateInteractionProjectionHookInvocation,
   validateInteractionProjectionHookRegistration,
+  validateTurnStartHookInvocation,
+  validateTurnStartHookRegistration,
 } from "./capability_hooks.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
@@ -275,20 +288,26 @@ export function createEffectRuntimeHandlers(
     ["todo.completion_state.metadata_updates", buildTodoCompletionMetadataUpdates],
     ["todo.completion.reduce", reduceTodoCompletionTransaction],
     ["todo.next_action.transition", transitionTodoNextAction],
+    ["todo.resume_condition.normalize", normalizeTodoResumeWhen],
+    ["todo.resume_condition.evaluate", evaluateTodoResumeConditions],
+    ["todo.external_wait.plan", planTodoExternalWaitTransition],
     ["scheduler.state_transition.evaluate", evaluateSchedulerStateTransition],
     ["scheduler.state.evaluate", evaluateSchedulerStateOperation],
     ["scheduler.state.load", loadSchedulerState],
     ["scheduler.state.write", writeSchedulerState],
-    ["scheduler.heartbeat.commit", evaluateSchedulerHeartbeatCommit],
     ["turn.delivery_route.evaluate", evaluateDeliveryRoute],
     ["work_item.action_portfolio.project", projectQuotaActionPortfolio],
     ["work_item.action_selection.qualify", qualifyActionSelection],
+    ["work_item.planning_horizon.project", projectQuotaPlanningHorizon],
+    ["work_item.planning_inventory.project", projectTodoPlanningInventory],
+    ["work_item.planning_inventory.detail", projectTodoPlanningInventoryDetail],
     ["goal.vision_checkpoint.evaluate", buildVisionCheckpoint],
     ["agent.delivery_workspace.evaluate", evaluateDeliveryWorkspace],
     [
       "quota.delivery_workspace_causality.evaluate",
       evaluateDeliveryWorkspaceCausality,
     ],
+    ["quota.spend.commit", evaluateQuotaSpendCommit],
     [
       "effect.program_from_ordered_steps",
       (params) => effectProgramFromOrderedSteps(
@@ -354,6 +373,17 @@ export function createEffectRuntimeHandlers(
     [
       "capability_hook.interaction_projection.validate",
       (params) => validateInteractionProjectionHookInvocation({
+        registration: params.registration,
+        result: params.result,
+      }),
+    ],
+    [
+      "capability_hook.turn_start.validate_registration",
+      (params) => validateTurnStartHookRegistration(params.registration),
+    ],
+    [
+      "capability_hook.turn_start.validate",
+      (params) => validateTurnStartHookInvocation({
         registration: params.registration,
         result: params.result,
       }),
@@ -435,6 +465,7 @@ export function createEffectRuntimeHandlers(
       ),
     ],
     ["turn.settlement.reduce", reduceTurnSettlementTransaction],
+    ["task_lease.acquire.reduce", reduceTaskLeaseAcquire],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     [
       "work_item.replan_settlement.reentry",

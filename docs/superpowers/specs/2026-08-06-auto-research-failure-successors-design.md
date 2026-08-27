@@ -37,7 +37,7 @@ research-frontier exhaustion record.
 
 **Expected implementation boundary:**
 
-- `loopx/capabilities/auto_research/` owns the completion and role-successor
+- `demo/auto_research/` owns the completion and role-successor
   semantics.
 - `examples/auto-research-*.py` owns focused public regression proof.
 - `docs/reference/protocols/auto-research-*.md` owns the public contract.
@@ -64,7 +64,7 @@ change mechanism, or close the question.
 capability_id: auto-research
 provider_id: loopx-core
 origin: builtin
-placement: loopx/capabilities/auto_research/
+placement: demo/auto_research/
 reason: The existing capability already owns research evidence, completion
         status, worker roles, and role-declared successor todos. The new
         behavior refines that lifecycle; it is not a provider-neutral

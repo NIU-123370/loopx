@@ -14,6 +14,17 @@ from .completion_state import (
     normalize_todo_no_followup,
     require_todo_completion_metadata,
 )
+from .resume_condition import (
+    TODO_RESUME_KIND_CAPACITY_AVAILABLE as TODO_RESUME_KIND_CAPACITY_AVAILABLE,
+    TODO_RESUME_KIND_MONITOR_CHANGED as TODO_RESUME_KIND_MONITOR_CHANGED,
+    TODO_RESUME_KIND_PR_MERGED as TODO_RESUME_KIND_PR_MERGED,
+    TODO_RESUME_KIND_TODO_DONE as TODO_RESUME_KIND_TODO_DONE,
+    TODO_RESUME_KIND_VALUES as TODO_RESUME_KIND_VALUES,
+    normalize_supported_todo_resume_when as normalize_supported_todo_resume_when,
+    normalize_todo_generation as normalize_todo_generation,
+    normalize_todo_resume_when as normalize_todo_resume_when,
+    require_supported_todo_resume_when as require_supported_todo_resume_when,
+)
 
 
 TODO_TASK_PATTERN = re.compile(r"^\s*[-*]\s+\[([ xX-])\]\s+(.+?)\s*$")
@@ -33,18 +44,6 @@ TODO_REPLAN_OBLIGATION_ID_PATTERN = re.compile(r"^replan-[a-f0-9]{16}$")
 TODO_EXPLORE_RESULT_NODE_REF_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,95}$")
 TODO_EXPLORE_RESULT_NODE_REF_LIMIT = 8
 TODO_DECISION_SCOPE_KEY_PATTERN = re.compile(r"^(?:\*|[a-z0-9][a-z0-9_.:@*/-]{0,95})$")
-TODO_RESUME_KIND_TODO_DONE = "todo_done"
-TODO_RESUME_KIND_PR_MERGED = "pr_merged"
-TODO_RESUME_KIND_CAPACITY_AVAILABLE = "capacity_available"
-TODO_RESUME_KIND_VALUES = {
-    TODO_RESUME_KIND_TODO_DONE,
-    TODO_RESUME_KIND_PR_MERGED,
-    TODO_RESUME_KIND_CAPACITY_AVAILABLE,
-}
-TODO_RESUME_WHEN_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,31}(?::[a-z0-9_.:@-]{1,96})?$")
-TODO_RESUME_PR_MERGED_PATTERN = re.compile(
-    r"^pr_merged:(?:(?:[a-z0-9_.-]{1,80})/(?:[a-z0-9_.-]{1,100}))?#[1-9][0-9]{0,8}$"
-)
 TODO_WRITE_SCOPE_MAX_CHARS = 160
 TODO_MONITOR_METADATA_FIELDS = (
     "target_key",
@@ -55,6 +54,7 @@ TODO_MONITOR_METADATA_FIELDS = (
     "result_hash",
     "consecutive_no_change",
     "material_change",
+    "material_change_generation",
     "max_no_change_before_replan",
     "watch_only",
 )
@@ -381,42 +381,6 @@ def require_todo_excluded_agents(
             )
         normalized.add(agent_id)
     return sorted(normalized)
-
-
-def normalize_todo_resume_when(value: Any) -> str | None:
-    candidate = compact_todo_text(value).lower()
-    if candidate and TODO_RESUME_PR_MERGED_PATTERN.match(candidate):
-        return candidate
-    if candidate and TODO_RESUME_WHEN_PATTERN.match(candidate):
-        return candidate
-    return None
-
-
-def normalize_supported_todo_resume_when(value: Any) -> str | None:
-    """Normalize resume conditions that LoopX can safely evaluate."""
-    candidate = normalize_todo_resume_when(value)
-    if not candidate:
-        return None
-    kind, separator, target = candidate.partition(":")
-    if kind == TODO_RESUME_KIND_TODO_DONE:
-        return candidate if separator and normalize_todo_id(target) else None
-    if kind == TODO_RESUME_KIND_PR_MERGED:
-        return candidate if TODO_RESUME_PR_MERGED_PATTERN.match(candidate) else None
-    if kind == TODO_RESUME_KIND_CAPACITY_AVAILABLE:
-        return candidate if separator and TODO_CAPABILITY_PATTERN.match(target) else None
-    return None
-
-
-def require_supported_todo_resume_when(value: Any) -> str | None:
-    if value is None or not str(value).strip():
-        return None
-    normalized = normalize_supported_todo_resume_when(value)
-    if normalized:
-        return normalized
-    raise ValueError(
-        "resume_when must use a supported condition: todo_done:<todo_id>, "
-        "pr_merged:[owner/repo]#<number>, or capacity_available:<capability>"
-    )
 
 
 def normalize_todo_global_gate(value: Any) -> bool | None:
@@ -1117,7 +1081,16 @@ _TODO_METADATA_FIELD_SCHEMA = (
         normalize_todo_resume_when,
         invalid_message=(
             "resume_when must be public-safe, e.g. "
-            "todo_done:todo_ab12cd34ef56 or pr_merged:#532"
+            "todo_done:todo_ab12cd34ef56, "
+            "monitor_changed:todo_monitor123, pr_merged:#532, or "
+            "capacity_available:short_pool"
+        ),
+    ),
+    _TodoMetadataField(
+        "resume_monitor_generation",
+        normalize_todo_generation,
+        invalid_message=(
+            "resume_monitor_generation must be a non-negative integer"
         ),
     ),
     _TodoMetadataField(
@@ -1276,6 +1249,7 @@ def format_todo_metadata_line(
     completion_recovery: str | None = None,
     replan_obligation_id: str | None = None,
     resume_when: str | None = None,
+    resume_monitor_generation: int | str | None = None,
     no_followup: bool | None = None,
     target_key: str | None = None,
     cadence: str | None = None,
@@ -1285,6 +1259,7 @@ def format_todo_metadata_line(
     result_hash: str | None = None,
     consecutive_no_change: str | None = None,
     material_change: str | None = None,
+    material_change_generation: int | str | None = None,
     max_no_change_before_replan: str | None = None,
     watch_only: str | None = None,
     note: str | None = None,

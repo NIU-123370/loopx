@@ -144,6 +144,28 @@ def test_runtime_capability_gap_returns_verified_reentry_packet() -> None:
     )
 
 
+def test_runtime_capability_reentry_preserves_visible_goal_turn() -> None:
+    turn_instance_id = "guided-start:fixture-turn"
+    contract = build_interaction_contract(
+        _blocked_payload(missing=["network"]),
+        available_capabilities=["shell"],
+        scheduler_execution_context=MANAGED_AGENT_CONTEXT,
+        turn_instance_id=turn_instance_id,
+    )
+
+    candidate = contract["cli_channel"]["runtime_capability_reentry"][
+        "candidates"
+    ][0]
+    assert candidate["command"] == (
+        "loopx --format json quota should-run --goal-id "
+        f"{GOAL_ID} --agent-id {AGENT_ID} "
+        f"--turn-instance-id {turn_instance_id} "
+        "--available-capability shell --available-capability network "
+        "--runtime-profile ark_managed_agent_goal"
+    )
+    assert contract["cli_channel"]["next_cli_actions"] == [candidate["command"]]
+
+
 def test_runtime_capability_reentry_does_not_switch_from_selected_todo() -> None:
     payload = {
         **_blocked_payload(missing=["network"]),

@@ -16,7 +16,7 @@ channels.
 | Informal peer help | [Discord](https://discord.gg/XmGgQyCFZd) | Onboarding, workflow comparison, show and tell, and community conversation. Chat is not an authoritative support or release record. |
 
 Public contributor work belongs on the
-[Contributor Task Board](../CONTRIBUTOR_TASKS.md) or in the contributor-task
+[Contributor Task Board](../docs/development/contributor-tasks.md) or in the contributor-task
 issue form. The
 [Technical Directions map](../docs/project/technical-directions.md) explains
 which programs are active and what maturity or promotion gate applies. Pull

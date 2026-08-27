@@ -5,8 +5,6 @@ import re
 from typing import Any, Callable, Optional
 
 from .contract import (
-    TODO_RESUME_KIND_CAPACITY_AVAILABLE,
-    TODO_RESUME_KIND_PR_MERGED,
     TODO_RESUME_KIND_TODO_DONE,
     TODO_STATUS_DONE,
     TODO_STATUS_OPEN,
@@ -31,6 +29,7 @@ from .contract import (
     normalize_todo_decision_scope_outcomes,
     normalize_todo_excluded_agents,
     normalize_todo_global_gate,
+    normalize_todo_generation,
     normalize_todo_goal_bound,
     normalize_todo_id,
     normalize_todo_id_list,
@@ -64,6 +63,7 @@ from .succession_warning import (
     TODO_SUCCESSION_WARNING_REASON_CODE,
     TODO_SUCCESSION_WARNING_SCHEMA_VERSION,
 )
+from .resume_condition import evaluate_todo_resume_conditions
 from ..work_items.project_asset import build_project_asset_todo_summary
 from .user_gate import open_user_gate_todo_items
 
@@ -112,21 +112,6 @@ class _TodoGroupLanes:
     claimed_monitor_items: list[dict[str, Any]]
     active_next_action_items: list[dict[str, Any]]
     active_next_action_executable_items: list[dict[str, Any]]
-GITHUB_PULL_URL_PATTERN = re.compile(
-    r"https://github\.com/(?P<repo>[^/]+/[^/]+)/pull/(?P<number>[0-9]+)(?:\b|/|#|\?)",
-    re.IGNORECASE,
-)
-PR_REF_PATTERN = re.compile(
-    r"(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#|#|pr[-_\s]*)"
-    r"(?P<number>[0-9]+)",
-    re.IGNORECASE,
-)
-PR_MERGED_EVENT_KINDS = {
-    "pr_merge",
-    "pr_merged",
-    "pull_request_merge",
-    "pull_request_merged",
-}
 TASK_ORCHESTRATION_CANDIDATE_FIELDS = (
     "todo_id",
     "status",
@@ -431,6 +416,16 @@ def structured_todo_item(
     resume_when = normalize_todo_resume_when(item.get("resume_when"))
     if resume_when:
         normalized["resume_when"] = resume_when
+    resume_monitor_generation = normalize_todo_generation(
+        item.get("resume_monitor_generation")
+    )
+    if resume_monitor_generation is not None:
+        normalized["resume_monitor_generation"] = resume_monitor_generation
+    material_change_generation = normalize_todo_generation(
+        item.get("material_change_generation")
+    )
+    if material_change_generation is not None:
+        normalized["material_change_generation"] = material_change_generation
     no_followup = normalize_todo_no_followup(item.get("no_followup"))
     if no_followup is not None:
         normalized["no_followup"] = no_followup
@@ -480,6 +475,7 @@ def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
         "global_gate",
         "unblocks_todo_id",
         "resume_when",
+        "resume_monitor_generation",
         "resume_condition",
         "resume_ready",
         "no_followup",
@@ -496,6 +492,7 @@ def compact_todo_item(item: dict[str, Any]) -> dict[str, Any]:
         "result_hash",
         "consecutive_no_change",
         "material_change",
+        "material_change_generation",
         "max_no_change_before_replan",
         "note",
         "evidence",
@@ -768,196 +765,38 @@ def attach_dependency_blockers(
             item["dependency_blockers"] = blockers
 
 
-def normalized_pr_ref_parts(value: Any) -> dict[str, Any] | None:
-    candidate = str(value or "").strip().lower()
-    if not candidate:
-        return None
-    pull_url_match = GITHUB_PULL_URL_PATTERN.match(candidate)
-    if pull_url_match:
-        return {
-            "repo": pull_url_match.group("repo"),
-            "number": int(pull_url_match.group("number")),
-            "normalized": f"{pull_url_match.group('repo')}#{pull_url_match.group('number')}",
-        }
-    match = PR_REF_PATTERN.match(candidate)
-    if not match:
-        return None
-    repo = match.group("repo")
-    number = int(match.group("number"))
-    normalized = f"{repo}#{number}" if repo else f"#{number}"
-    return {"repo": repo, "number": number, "normalized": normalized}
-
-
-def rollout_event_pr_refs(event: dict[str, Any]) -> list[dict[str, Any]]:
-    refs: list[dict[str, Any]] = []
-    code_refs = event.get("code_refs") if isinstance(event.get("code_refs"), dict) else {}
-    for value in (code_refs.get("pr_ref"), event.get("pr_ref")):
-        parsed = normalized_pr_ref_parts(value)
-        if parsed:
-            refs.append(parsed)
-    source_refs = event.get("source_refs")
-    if isinstance(source_refs, list):
-        for source_ref in source_refs:
-            if not isinstance(source_ref, dict):
-                continue
-            if str(source_ref.get("kind") or "").strip().lower() not in {"pull_request", "pr"}:
-                continue
-            parsed = normalized_pr_ref_parts(source_ref.get("ref"))
-            if parsed:
-                refs.append(parsed)
-    unique: list[dict[str, Any]] = []
-    seen: set[tuple[str | None, int]] = set()
-    for ref in refs:
-        key = (ref.get("repo"), int(ref.get("number") or 0))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(ref)
-    return unique
-
-
-def _github_pr_repo_from_task_repository(value: Any) -> str | None:
-    repository = normalize_todo_task_repository(value)
-    prefix = "git:github.com/"
-    if not repository or not repository.casefold().startswith(prefix):
-        return None
-    path = repository[len(prefix) :].strip("/")
-    if len(path.split("/")) != 2:
-        return None
-    return path.casefold()
-
-
-def pr_merged_condition(
-    target: str,
-    rollout_events: list[dict[str, Any]],
-    *,
-    task_repository: Any = None,
-) -> dict[str, Any]:
-    condition: dict[str, Any] = {
-        "pr_number": None,
-        "pr_repo": None,
-        "source": "rollout_event_log",
-    }
-    target_ref = normalized_pr_ref_parts(target)
-    if not target_ref:
-        condition["invalid_target"] = True
-        return condition
-    condition["pr_number"] = target_ref["number"]
-    target_repo = target_ref.get("repo")
-    if target_repo:
-        condition["pr_repo"] = target_repo
-        condition["repository_binding_source"] = "qualified_resume_when"
-    else:
-        target_repo = _github_pr_repo_from_task_repository(task_repository)
-        if target_repo:
-            condition["pr_repo"] = target_repo
-            condition["repository_binding_source"] = "task_repository"
-        else:
-            candidate_pr_refs = sorted(
-                {
-                    str(event_ref.get("normalized") or "")
-                    for event in rollout_events
-                    if isinstance(event, dict)
-                    and str(event.get("event_kind") or "").strip().lower()
-                    in PR_MERGED_EVENT_KINDS
-                    for event_ref in rollout_event_pr_refs(event)
-                    if int(event_ref.get("number") or 0) == int(target_ref["number"])
-                    and event_ref.get("repo")
-                }
-            )
-            condition.update(
-                {
-                    "repository_binding_state": "ambiguous",
-                    "repository_binding_reason": (
-                        "task_repository_missing"
-                        if not normalize_todo_task_repository(task_repository)
-                        else "task_repository_not_github"
-                    ),
-                    "candidate_pr_refs": candidate_pr_refs[:8],
-                }
-            )
-            return condition
-    for event in rollout_events:
-        if not isinstance(event, dict):
-            continue
-        if str(event.get("event_kind") or "").strip().lower() not in PR_MERGED_EVENT_KINDS:
-            continue
-        for event_ref in rollout_event_pr_refs(event):
-            if int(event_ref.get("number") or 0) != int(target_ref["number"]):
-                continue
-            if event_ref.get("repo") != target_repo:
-                continue
-            condition.update(
-                {
-                    "satisfied": True,
-                    "matched_event_id": event.get("event_id"),
-                    "matched_event_kind": event.get("event_kind"),
-                    "matched_pr_ref": event_ref.get("normalized"),
-                    "matched_event_at": event.get("recorded_at"),
-                }
-            )
-            return condition
-    return condition
-
-
 def apply_resume_conditions(
     items: list[dict[str, Any]],
     *,
     resume_source_items: list[dict[str, Any]] | None = None,
     rollout_events: list[dict[str, Any]] | None = None,
 ) -> None:
-    by_id: dict[str, dict[str, Any]] = {}
-    for source_item in [*(resume_source_items or []), *items]:
-        todo_id = normalize_todo_id(source_item.get("todo_id"))
-        if todo_id:
-            by_id[todo_id] = source_item
+    resume_items = [
+        item
+        for item in items
+        if normalize_todo_resume_when(item.get("resume_when"))
+    ]
+    if not resume_items:
+        return
+    source_items = [*(resume_source_items or []), *items]
+    conditions = evaluate_todo_resume_conditions(
+        resume_items,
+        source_items=source_items,
+        rollout_events=rollout_events,
+    )
     for item in items:
         resume_when = normalize_todo_resume_when(item.get("resume_when"))
         if not resume_when:
             continue
-        condition: dict[str, Any] = {
-            "schema_version": "todo_resume_condition_v0",
-            "resume_when": resume_when,
-            "satisfied": False,
-        }
-        kind, separator, target = resume_when.partition(":")
-        condition["kind"] = kind
-        if separator:
-            condition["target"] = target
-        if kind == TODO_RESUME_KIND_TODO_DONE and target:
-            target_item = by_id.get(target)
-            condition["target_todo_id"] = target
-            condition["target_status"] = (
-                normalize_todo_status(target_item.get("status"))
-                if isinstance(target_item, dict)
-                else None
-            )
-            if isinstance(target_item, dict):
-                condition["target_archive_state"] = target_item.get("archive_state")
-                condition["target_source_section"] = target_item.get("source_section")
-                condition["target_task_class"] = todo_item_task_class(target_item)
-                target_claimed_by = normalize_todo_claimed_by(target_item.get("claimed_by"))
-                if target_claimed_by:
-                    condition["target_claimed_by"] = target_claimed_by
-            condition["satisfied"] = condition["target_status"] == "done"
-        elif kind == TODO_RESUME_KIND_PR_MERGED and target:
-            condition.update(
-                pr_merged_condition(
-                    target,
-                    rollout_events or [],
-                    task_repository=item.get("task_repository"),
-                )
-            )
-        elif kind == TODO_RESUME_KIND_CAPACITY_AVAILABLE and target:
-            condition.update(
-                {
-                    "provider": "runtime_available_capabilities",
-                    "provider_required": True,
-                    "capability": target,
-                }
-            )
-        else:
-            condition["unsupported"] = True
+        todo_id = normalize_todo_id(item.get("todo_id"))
+        condition = conditions.get(todo_id or "")
+        if condition is None:
+            condition = {
+                "schema_version": "todo_resume_condition_v0",
+                "resume_when": resume_when,
+                "satisfied": False,
+                "unsupported": True,
+            }
         item["resume_condition"] = condition
         item["resume_ready"] = bool(condition.get("satisfied"))
 

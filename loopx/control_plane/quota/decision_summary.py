@@ -213,6 +213,7 @@ def resolve_quota_run_decision(
     replan_obligation: dict[str, Any] | None,
     goal_health_ok: bool,
     inbox_reply_due: bool,
+    inbox_material_review_due: bool,
     agent_frontier_id: str | None,
     registered_agent_ids: list[str],
     goal_frontier_projection: dict[str, Any] | None,
@@ -222,6 +223,7 @@ def resolve_quota_run_decision(
 
     capability_repair_allowed = False
     workspace_repair_allowed = False
+    inbox_priority_due = inbox_reply_due or inbox_material_review_due
     if (
         capability_gate
         and capability_gate.get("action") != "run"
@@ -277,7 +279,7 @@ def resolve_quota_run_decision(
         quota=quota,
     )
     replan_decision_allowed = (
-        not inbox_reply_due
+        not inbox_priority_due
         and autonomous_replan_decision_allowed(
             replan_obligation=replan_obligation,
             plan_ok=goal_health_ok,
@@ -300,7 +302,7 @@ def resolve_quota_run_decision(
     terminal_no_followup = goal_frontier_is_terminal_no_followup(
         projection=goal_frontier_projection
     )
-    if terminal_no_followup and not inbox_reply_due:
+    if terminal_no_followup and not inbox_priority_due:
         quota = {
             **quota,
             "state": "terminal_no_followup",
@@ -337,6 +339,17 @@ def resolve_quota_run_decision(
         reason = (
             "a direct Lark question, bot mention, or verified reply to the bot "
             "is pending reply"
+        )
+    elif inbox_material_review_due:
+        should_run = True
+        normal_delivery_allowed = True
+        recovery_delivery_allowed = False
+        self_repair_allowed = False
+        capability_repair_allowed = False
+        workspace_repair_allowed = False
+        effective_action = "operator_inbox_material_review_due"
+        reason = (
+            "captured unaddressed operator-inbox material is pending bounded review"
         )
 
     effective_action, reason = _task_orchestration_effective_action(

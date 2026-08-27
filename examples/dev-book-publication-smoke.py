@@ -66,6 +66,25 @@ def compact(text: str) -> str:
     return " ".join(text.split())
 
 
+def markdown_link_targets(markdown: str) -> list[str]:
+    return re.findall(r"(?<!!)\[[^]]+\]\(([^)]+)\)", markdown)
+
+
+def semantic_checkpoints(markdown: str) -> list[str]:
+    return re.findall(
+        r"<!-- community-casebook:([a-z0-9-]+(?::(?:start|end))?) -->",
+        markdown,
+    )
+
+
+def marked_section(markdown: str, section_id: str) -> str:
+    start = f"<!-- community-casebook:{section_id}:start -->"
+    end = f"<!-- community-casebook:{section_id}:end -->"
+    assert start in markdown, start
+    assert end in markdown, end
+    return markdown.split(start, 1)[1].split(end, 1)[0]
+
+
 def assert_bilingual_concepts(
     zh_path: str,
     en_path: str,
@@ -76,6 +95,84 @@ def assert_bilingual_concepts(
     for zh_marker, en_marker in concepts:
         assert zh_marker in zh_text, f"{zh_path}: missing bilingual marker {zh_marker}"
         assert en_marker in en_text, f"{en_path}: missing bilingual marker {en_marker}"
+
+
+def assert_community_casebook_is_bilingual() -> None:
+    protocol_map_zh = read(BOOK / "chapters" / "source-protocol-map.md")
+    protocol_map_en = read(BOOK / "en" / "chapters" / "source-protocol-map.md")
+    validation_zh = read(BOOK / "chapters" / "source-validation-to-pr.md")
+    validation_en = read(BOOK / "en" / "chapters" / "source-validation-to-pr.md")
+
+    expected_protocol_checkpoints = [
+        "signal-to-bounded-work:start",
+        "question-before-fix",
+        "user-idea-to-contract",
+        "claim-before-code",
+        "signal-to-bounded-work:end",
+        "rfc-review-lab:start",
+        "rfc-status",
+        "rfc-community-proposal",
+        "rfc-output",
+        "rfc-review-lab:end",
+    ]
+    expected_validation_checkpoints = [
+        "small-pr:start",
+        "small-pr-problem",
+        "small-pr-scope",
+        "small-pr-lesson",
+        "small-pr:end",
+        "review-repair:start",
+        "review-repair-problem",
+        "review-repair-response",
+        "review-repair-lesson",
+        "review-repair:end",
+    ]
+    assert semantic_checkpoints(protocol_map_zh) == expected_protocol_checkpoints
+    assert semantic_checkpoints(protocol_map_en) == expected_protocol_checkpoints
+    assert semantic_checkpoints(validation_zh) == expected_validation_checkpoints
+    assert semantic_checkpoints(validation_en) == expected_validation_checkpoints
+
+    for zh_text, en_text, section_id, required_targets in (
+        (
+            protocol_map_zh,
+            protocol_map_en,
+            "signal-to-bounded-work",
+            (
+                "https://github.com/huangruiteng/loopx/discussions/3069",
+                "https://github.com/huangruiteng/loopx/issues/2353",
+                "https://github.com/huangruiteng/loopx/issues/3549",
+                "https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md",
+            ),
+        ),
+        (
+            protocol_map_zh,
+            protocol_map_en,
+            "rfc-review-lab",
+            (
+                "https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/README.md",
+                "https://github.com/huangruiteng/loopx/discussions/3157",
+                "https://github.com/huangruiteng/loopx/blob/main/docs/community/open-strategy-reviews.md",
+            ),
+        ),
+        (
+            validation_zh,
+            validation_en,
+            "small-pr",
+            ("https://github.com/huangruiteng/loopx/pull/3540",),
+        ),
+        (
+            validation_zh,
+            validation_en,
+            "review-repair",
+            ("https://github.com/huangruiteng/loopx/pull/3529",),
+        ),
+    ):
+        zh_targets = markdown_link_targets(marked_section(zh_text, section_id))
+        en_targets = markdown_link_targets(marked_section(en_text, section_id))
+        assert zh_targets == en_targets, section_id
+        for target in required_targets:
+            assert zh_targets.count(target) == 1, target
+            assert en_targets.count(target) == 1, target
 
 
 def validate_rendered_site(site_dir: Path) -> None:
@@ -259,6 +356,8 @@ def main() -> int:
 
     for page in COURSE_PAGES:
         assert (CONTROL_PLANE_COURSE / f"{page}.md").is_file(), page
+
+    assert_community_casebook_is_bilingual()
 
     reading_guides = (
         read(BOOK / "chapters" / "00-reading-guide.md"),

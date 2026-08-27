@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from ...control_plane import control_plane_policy_summary
-from ...execution_profile import execution_profile_summary
-from ...long_task_cadence import long_task_cadence_hint_summary
-from ...orchestration import orchestration_policy_summary
 from ...control_plane.quota.states import QUOTA_STATE_ORDER
 from ...control_plane.runtime.decision_freshness import (
     DECISION_FRESHNESS_WARNING_ITEM_LIMIT,
 )
+from ...execution_profile import execution_profile_summary
+from ...long_task_cadence import long_task_cadence_hint_summary
+from ...orchestration import orchestration_policy_summary
 from ..markdown import (
     append_operator_action_markdown,
     as_dict,
@@ -1046,6 +1046,8 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
                 f"mentions={urgency.get('direct_mention_count')} "
                 f"bot_replies={urgency.get('reply_to_bot_count')} "
                 f"reply_due={urgency.get('reply_due')} "
+                f"material_review={urgency.get('material_review_count')} "
+                f"material_review_due={urgency.get('material_review_due')} "
                 f"oldest_age_seconds={urgency.get('oldest_pending_age_seconds')}"
             )
         run_permission_policy = (

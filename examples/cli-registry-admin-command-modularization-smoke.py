@@ -14,6 +14,7 @@ CLI = ROOT / "loopx" / "cli.py"
 MODULE = ROOT / "loopx" / "cli_commands" / "registry_admin.py"
 CONFIGURE_MODULE = ROOT / "loopx" / "cli_commands" / "registry_admin_configure.py"
 AUTHORITY_MODULE = ROOT / "loopx" / "cli_commands" / "registry_authority.py"
+LIFECYCLE_MODULE = ROOT / "loopx" / "cli_commands" / "registry_admin_lifecycle.py"
 THREAD_RESOLUTION_MODULE = (
     ROOT / "loopx" / "cli_commands" / "registry_admin_thread_resolution.py"
 )
@@ -141,6 +142,7 @@ def main() -> None:
     module_source = MODULE.read_text(encoding="utf-8")
     configure_source = CONFIGURE_MODULE.read_text(encoding="utf-8")
     authority_source = AUTHORITY_MODULE.read_text(encoding="utf-8")
+    lifecycle_source = LIFECYCLE_MODULE.read_text(encoding="utf-8")
     thread_resolution_source = THREAD_RESOLUTION_MODULE.read_text(encoding="utf-8")
     registry_admin_family_source = (
         module_source
@@ -148,6 +150,8 @@ def main() -> None:
         + configure_source
         + "\n"
         + authority_source
+        + "\n"
+        + lifecycle_source
         + "\n"
         + thread_resolution_source
     )
@@ -207,8 +211,31 @@ def main() -> None:
         "import_doc_registry_authority(",
     ):
         require(marker in authority_source, f"registry authority module missing {marker}")
+    for marker in (
+        "REGISTRY_LIFECYCLE_COMMANDS",
+        "register_registry_lifecycle_commands",
+        "handle_registry_lifecycle_command",
+        'if args.command == "archive-runtime":',
+        'if args.command == "retire-global-goal":',
+        'if args.command == "uninstall-project":',
+        'if args.command == "sync-global":',
+        'if args.command == "migrate-state":',
+        "archive_runtime_goal(",
+        "retire_global_registry_goals(",
+        "uninstall_project(",
+        "migrate_legacy_state(",
+    ):
+        require(marker in lifecycle_source, f"registry lifecycle module missing {marker}")
     for marker in ("register_registry_authority_commands", "handle_registry_authority_command"):
         require(marker in module_source, f"registry admin module should delegate authority commands through {marker}")
+    for marker in (
+        "register_registry_lifecycle_commands",
+        "handle_registry_lifecycle_command",
+    ):
+        require(
+            marker in module_source,
+            f"registry admin module should delegate lifecycle commands through {marker}",
+        )
     for marker in (
         "register_registry_thread_resolution_command",
         "handle_registry_thread_resolution_command",

@@ -194,6 +194,7 @@ Names a machine-readable condition that lets blocked or deferred work re-enter r
 todo_done:<todo-id>
 pr_merged:<pr-id>
 capacity_available:<capability>
+monitor_changed:<monitor-todo-id>
 ```
 
 A satisfied condition does not always make the old Todo runnable. The task may be stale and require a

@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 from loopx.doctor import REQUIRED_INSTALLED_SKILL_PHRASES  # noqa: E402
 
 
-SKILL = ROOT / "loopx" / "capabilities" / "auto_research" / "worker_skill" / "SKILL.md"
+SKILL = ROOT / "demo" / "auto_research" / "worker_skill" / "SKILL.md"
 ROLE_PROFILE = ROOT / "docs" / "reference" / "protocols" / "auto-research-role-profile-v0.md"
 ROLE_STATE_MACHINE = ROOT / "docs" / "reference" / "protocols" / "auto-research-role-state-machine-v0.md"
 LANE_CONTRACT = ROOT / "docs" / "reference" / "protocols" / "auto-research-lane-contract-v1.md"

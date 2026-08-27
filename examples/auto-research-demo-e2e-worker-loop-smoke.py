@@ -33,18 +33,18 @@ def assert_public_safe(payload: Any) -> None:
 
 def main() -> int:
     sys.path.insert(0, str(REPO_ROOT))
-    from loopx.capabilities.auto_research.demo_e2e import (
+    from demo.auto_research.demo_e2e import (
         _build_collective_round_summary,
         run_auto_research_demo_e2e,
     )
-    from loopx.capabilities.auto_research.human_view import render_auto_research_markdown
-    from loopx.capabilities.auto_research.preset import default_auto_research_agent_specs
+    from demo.auto_research.human_view import render_auto_research_markdown
+    from demo.auto_research.preset import default_auto_research_agent_specs
 
     runtime_scripts_source = (
-        REPO_ROOT / "loopx/control_plane/agents/multi_agent/runtime_scripts.py"
+        REPO_ROOT / "demo/multi_agent/runtime_scripts.py"
     ).read_text(encoding="utf-8")
     preset_source = (
-        REPO_ROOT / "loopx/capabilities/auto_research/preset.py"
+        REPO_ROOT / "demo/auto_research/preset.py"
     ).read_text(encoding="utf-8")
     assert "raw JSON is not printed in visible panes" in runtime_scripts_source
     assert "No automated worker-turn is configured" in runtime_scripts_source

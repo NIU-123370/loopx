@@ -6,21 +6,21 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from loopx.extensions.lark.event_inbox import (  # noqa: E402
+from loopx.extensions.lark.event_inbox import (
     acknowledge_lark_event_inbox,
     ingest_lark_event_inbox,
     inspect_lark_event_inbox,
     lark_event_inbox_contains_text,
     project_lark_event_inbox_urgency,
 )
-from loopx.extensions.lark.inbox_reply import reply_lark_event_inbox  # noqa: E402
+from loopx.extensions.lark.inbox_reply import reply_lark_event_inbox
 
 
 def main() -> None:
@@ -77,16 +77,22 @@ def main() -> None:
         )
         pending = inspect_lark_event_inbox(project=project, config_path=config)
         assert pending["thread_complete"] is True, pending
-        assert lark_event_inbox_contains_text(
-            project=project,
-            config_path=config,
-            text="record this feedback",
-        ) is True
-        assert lark_event_inbox_contains_text(
-            project=project,
-            config_path=config,
-            text="https://github.com/owner/repo/pull/404",
-        ) is False
+        assert (
+            lark_event_inbox_contains_text(
+                project=project,
+                config_path=config,
+                text="record this feedback",
+            )
+            is True
+        )
+        assert (
+            lark_event_inbox_contains_text(
+                project=project,
+                config_path=config,
+                text="https://github.com/owner/repo/pull/404",
+            )
+            is False
+        )
 
         imported = ingest_lark_event_inbox(
             project=project,
@@ -181,6 +187,7 @@ def main() -> None:
                 "message_id": "om_direct_question",
                 "create_time": "2026-07-12T10:02:00Z",
                 "content": "@Project Review Bot 结论呢？",
+                "mentioned": True,
             },
             {
                 "schema_version": "lark_event_inbox_event_v0",
@@ -219,7 +226,7 @@ def main() -> None:
         urgency = project_lark_event_inbox_urgency(
             project=project,
             config_path=config,
-            now=datetime(2026, 7, 12, 10, 12, tzinfo=timezone.utc),
+            now=datetime(2026, 7, 12, 10, 12, tzinfo=UTC),
         )
         assert urgency["pending_count"] == 4, urgency
         assert urgency["direct_question_count"] == 1, urgency
@@ -265,6 +272,27 @@ def main() -> None:
             if args[3:6] == ["im", "chats", "get"]:
                 return {"returncode": 0, "stdout": "{}", "stderr": ""}
             if "+messages-reply" in args:
+                if "--dry-run" in args:
+                    reply_text = args[args.index("--text") + 1]
+                    return {
+                        "returncode": 0,
+                        "stdout": json.dumps(
+                            {
+                                "api": [
+                                    {
+                                        "body": {
+                                            "content": json.dumps(
+                                                {"text": reply_text},
+                                                ensure_ascii=False,
+                                            )
+                                        }
+                                    }
+                                ]
+                            },
+                            ensure_ascii=False,
+                        ),
+                        "stderr": "",
+                    }
                 return {
                     "returncode": 0,
                     "stdout": json.dumps({"message_id": "om_reply_1"}),
@@ -320,6 +348,8 @@ def main() -> None:
                 if args[3:6] == ["im", "chats", "get"]:
                     return {"returncode": 0, "stdout": "{}", "stderr": ""}
                 if "+messages-reply" in args:
+                    if "--dry-run" in args:
+                        return successful_runner(args)
                     return {
                         "returncode": 0,
                         "stdout": json.dumps({"message_id": "om_reply_mention"}),
@@ -360,9 +390,7 @@ def main() -> None:
 
             return run
 
-        mention_reply = (
-            '<at user_id="ou_reviewer_fixture">Reviewer</at> 已记录并修正。'
-        )
+        mention_reply = '<at user_id="ou_reviewer_fixture">Reviewer</at> 已记录并修正。'
         normalized_mention = reply_lark_event_inbox(
             project=project,
             config_path=config,

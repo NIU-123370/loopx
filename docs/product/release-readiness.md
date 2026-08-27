@@ -467,6 +467,12 @@ path, and canary route rather than as a user-facing release baseline.
   generation-fenced, adds a native DeepSeek Harness Goal workspace and
   Agent-scoped external Connector providers, and hardens long Todo chains,
   prepared-effect recovery, benchmark admission, and public-smoke release gates.
+- `v0.5.3` on 2026-08-27: host reach and autonomous-continuation reliability
+  release at the matching `v0.5.3` tag. LoopX adds ZCode and Antigravity CLI
+  Goal surfaces, a bounded citation-led deep-research workflow, and an explicit
+  Pi task-lease facade; it also strengthens Lark inbox routing and catch-up,
+  typed Todo/quota/scheduler settlement, repository delivery admission, and
+  runtime startup recovery.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

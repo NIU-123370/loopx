@@ -439,7 +439,7 @@ What remains owner-held?
 ## Link public work, not local runtime state
 
 Nontrivial contributions should link
-[`CONTRIBUTOR_TASKS.md`](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+the [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
 or a GitHub Issue:
 
 - state the intended slice before a large change;
@@ -477,6 +477,76 @@ Do not implement every comment mechanically. Ask:
 5. Does the PR description or documentation need recomposition?
 
 If review exposes protocol ambiguity, agree on semantics first. Do not make two contradictory tests pass.
+
+## Two real community contribution cases
+
+This section and its Chinese counterpart are semantic mirrors. A material difference in case facts,
+conclusions, link targets, or risk boundaries is a documentation defect.
+
+<!-- community-casebook:small-pr:start -->
+<!-- community-casebook:small-pr-problem -->
+
+### Case one: turn a CLI inconsistency into a complete small PR
+
+[PR #3540](https://github.com/huangruiteng/loopx/pull/3540)
+started from a real first-run and deep-use observation: `loopx --format json doctor` worked, while the more
+intuitive `loopx doctor --format json` failed during argparse processing. The contributor reused the
+existing subcommand format contract instead of creating a second renderer.
+
+<!-- community-casebook:small-pr-scope -->
+
+The final change covered only parser wiring, the doctor handler, and one end-to-end CLI regression.
+Validation covered:
+
+- the new subcommand argument position;
+- the existing global argument position;
+- precedence when both forms appear;
+- fail-closed rejection of an invalid format before diagnostics run.
+
+<!-- community-casebook:small-pr-lesson -->
+
+The value of this case is not that it changed only a few lines. It completed the whole chain:
+
+```text
+real user friction
+  -> existing public contract
+  -> correct owner
+  -> positive, compatibility, and negative validation
+  -> independently reviewable result
+```
+
+A small PR is not a lower-standard PR. It keeps one user outcome easier to validate and reverse.
+<!-- community-casebook:small-pr:end -->
+
+<!-- community-casebook:review-repair:start -->
+<!-- community-casebook:review-repair-problem -->
+
+### Case two: review high-risk state writes with counterexamples
+
+[PR #3529](https://github.com/huangruiteng/loopx/pull/3529)
+implemented a provider-neutral Stage 2 slice for shared-goal coordination: the aggregate head, file
+provider, and `claim_work` executor. The first revision already had broad positive coverage, but review
+still produced stronger illegal states: a partial write reported as `applied`, a corrupt receipt escaping
+as an untyped exception, an oversized TTL crossing the typed boundary, a lock implementation that could
+not import on Windows, and persisted naive timestamps or bool-as-int generations.
+
+<!-- community-casebook:review-repair-response -->
+
+The author did not add string checks for each example. The repair strengthened the shared trust boundary:
+
+- durable writes use write-all, fsync, and atomic replace, returning `ambiguous` when the outcome cannot be
+  proven;
+- persisted receipts, timestamps, and generations pass typed validation before the executor consumes them;
+- locking reuses the repository's existing cross-platform owner;
+- the RFC, negative tests, and CI describe the same machine-enforced obligation.
+
+<!-- community-casebook:review-repair-lesson -->
+
+This case shows that review is not style feedback after implementation. A high-value review supplies a
+concrete counterexample that breaks the intended invariant and asks for the repair at the real owner. The
+author then adds negative evidence proving that the same class of illegal state cannot re-enter the
+semantic core. The final `APPROVE` applies only to the revalidated exact head.
+<!-- community-casebook:review-repair:end -->
 
 ## Distinguish merge, release, deployment, and observation
 

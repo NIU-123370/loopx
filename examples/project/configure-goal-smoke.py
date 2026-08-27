@@ -190,6 +190,7 @@ def main() -> int:
             "enabled": True,
             "config_pointer_registered": True,
             "agent_scoped_count": 0,
+            "agent_scoped_bound_count": 0,
         }, dry
         assert dry["after"]["lark_kanban_heartbeat_sync"] == {
             "enabled": True,
@@ -365,6 +366,16 @@ def main() -> int:
                 f"loopx --registry {registry_path} lark-inbox drain "
                 "--goal-id configure-goal-fixture"
             ),
+            "binding": {
+                "schema_version": "operator_inbox_binding_v0",
+                "status": "unbound",
+                "digest_recorded": False,
+                "config_available": False,
+                "binding_verified": False,
+                "attention_required": False,
+                "private_config_returned": False,
+                "config_digest_returned": False,
+            },
             "urgency": {
                 "schema_version": "lark_event_inbox_urgency_v0",
                 "enabled": True,

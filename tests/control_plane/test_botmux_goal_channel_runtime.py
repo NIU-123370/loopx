@@ -21,6 +21,7 @@ from loopx.control_plane.goals.botmux_runtime import (
     status_botmux_runtime,
     trigger_botmux_runtime,
 )
+from loopx.file_lock import LOCK_POLICIES, LockAcquisitionPolicy, LockPolicy
 
 
 GOAL_ID = "goal-public-fixture"
@@ -1070,3 +1071,147 @@ def test_concurrent_trigger_dispatches_provider_once(
         "already_dispatched",
         "queued",
     ]
+
+
+def test_doctor_waits_for_concurrent_setup_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, registry_path = _registry(tmp_path)
+    binding_path = tmp_path / ".loopx" / "goal-channel-runtime.json"
+    monkeypatch.setenv("BOTMUX_TEST_TOKEN", "secret-public-fixture")
+    ready_to_probe = threading.Event()
+    allow_setup_to_finish = threading.Event()
+    doctor_result: dict[str, Any] = {}
+
+    def delayed_requester(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["path"] == "/api/trigger" and kwargs["payload"]["options"].get("dryRun") is True:
+            ready_to_probe.set()
+            allow_setup_to_finish.wait(timeout=2.0)
+        return _requester([], tmp_path)(**kwargs)
+
+    def run_setup() -> None:
+        setup_botmux_runtime(
+            registry=registry,
+            registry_path=registry_path,
+            goal_id=GOAL_ID,
+            binding_path=binding_path,
+            endpoint="http://127.0.0.1:7891",
+            bot_id=BOT_ID,
+            chat_id=CHAT_ID,
+            token_env="BOTMUX_TEST_TOKEN",
+            execute=True,
+            requester=delayed_requester,
+        )
+
+    def run_doctor() -> None:
+        ready_to_probe.wait(timeout=2.0)
+        doctor_result.update(
+            doctor_botmux_runtime(
+                goal_id=GOAL_ID,
+                binding_path=binding_path,
+                requester=_requester([], tmp_path),
+            )
+        )
+
+    setup_thread = threading.Thread(target=run_setup)
+    doctor_thread = threading.Thread(target=run_doctor)
+    setup_thread.start()
+    doctor_thread.start()
+    ready_to_probe.wait(timeout=2.0)
+    time.sleep(0.05)
+    allow_setup_to_finish.set()
+    setup_thread.join()
+    doctor_thread.join()
+
+    assert doctor_result["ok"] is True
+    assert doctor_result["status"] == "ready"
+
+
+@pytest.mark.parametrize(
+    ("runtime_operation", "waiter_operation"),
+    [
+        ("runtime_doctor", "botmux_runtime_doctor"),
+        ("runtime_status", "botmux_runtime_status"),
+    ],
+)
+def test_runtime_reads_return_typed_packet_when_setup_lock_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_operation: str,
+    waiter_operation: str,
+) -> None:
+    registry, registry_path = _registry(tmp_path)
+    binding_path = tmp_path / ".loopx" / "goal-channel-runtime.json"
+    monkeypatch.setenv("BOTMUX_TEST_TOKEN", "secret-public-fixture")
+    monkeypatch.setitem(
+        LOCK_POLICIES,
+        LockAcquisitionPolicy.MUTATION,
+        LockPolicy(
+            timeout_seconds=0.05,
+            poll_interval_seconds=0.005,
+            retry_mode="manual_after_holder_inspection",
+        ),
+    )
+    setup_holds_lock = threading.Event()
+    allow_setup_to_finish = threading.Event()
+    setup_result: dict[str, Any] = {}
+
+    def delayed_requester(**kwargs: Any) -> dict[str, Any]:
+        if (
+            kwargs["path"] == "/api/trigger"
+            and kwargs["payload"]["options"].get("dryRun") is True
+        ):
+            setup_holds_lock.set()
+            allow_setup_to_finish.wait(timeout=2.0)
+        return _requester([], tmp_path)(**kwargs)
+
+    def run_setup() -> None:
+        setup_result.update(
+            setup_botmux_runtime(
+                registry=registry,
+                registry_path=registry_path,
+                goal_id=GOAL_ID,
+                binding_path=binding_path,
+                endpoint="http://127.0.0.1:7891",
+                bot_id=BOT_ID,
+                chat_id=CHAT_ID,
+                token_env="BOTMUX_TEST_TOKEN",
+                execute=True,
+                requester=delayed_requester,
+            )
+        )
+
+    setup_thread = threading.Thread(target=run_setup)
+    setup_thread.start()
+    assert setup_holds_lock.wait(timeout=2.0)
+
+    try:
+        if runtime_operation == "runtime_doctor":
+            result = doctor_botmux_runtime(
+                goal_id=GOAL_ID,
+                binding_path=binding_path,
+                requester=_requester([], tmp_path),
+            )
+        else:
+            result = status_botmux_runtime(
+                goal_id=GOAL_ID,
+                binding_path=binding_path,
+                requester=_requester([], tmp_path),
+            )
+    finally:
+        allow_setup_to_finish.set()
+        setup_thread.join(timeout=2.0)
+
+    assert not setup_thread.is_alive()
+    assert setup_result["status"] == "configured"
+    assert result["ok"] is False
+    assert result["operation"] == runtime_operation
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "botmux_runtime_lock_timeout"
+    assert result["error_code"] == "lock_acquire_timeout"
+    assert result["lock_timeout"]["holder"]["operation"] == "botmux_runtime_setup"
+    assert result["lock_timeout"]["waiter"]["operation"] == waiter_operation
+    assert result["operator_action"]["action"] == "inspect_lock_holder"
+    assert json.loads(json.dumps(result)) == result
+    _assert_public_packet(result)

@@ -48,7 +48,7 @@ def _read_json_object(path_text: str) -> dict[str, Any]:
     )
     payload = json.loads(raw)
     if not isinstance(payload, dict):
-        raise TypeError("benchmark experiment board row must be an object")
+        raise TypeError("benchmark experiment board JSON input must be an object")
     return payload
 
 
@@ -73,6 +73,13 @@ def register_benchmark_experiment_board_commands(
     )
     add_subcommand_format(show_parser)
     _add_board_location_arguments(show_parser)
+    show_parser.add_argument(
+        "--four-arm-contract-json",
+        help=(
+            "Optional compact benchmark_four_arm_contract_v0 JSON. When present, "
+            "project qualified conditional effects and difference-in-differences."
+        ),
+    )
 
     upsert_parser = benchmark_subparsers.add_parser(
         "experiment-board-upsert",
@@ -118,11 +125,13 @@ def _board_payload(
     rows: list[dict[str, Any]],
     benchmark_id: str | None,
     study_id: str | None,
+    four_arm_contract: dict[str, Any] | None,
 ) -> dict[str, Any]:
     return build_benchmark_experiment_board(
         rows,
         benchmark_id=benchmark_id,
         study_id=study_id,
+        four_arm_contract=four_arm_contract,
     )
 
 
@@ -217,6 +226,11 @@ def handle_benchmark_experiment_board_command(
             rows=rows,
             benchmark_id=args.benchmark_id,
             study_id=args.study_id,
+            four_arm_contract=(
+                _read_json_object(args.four_arm_contract_json)
+                if getattr(args, "four_arm_contract_json", None)
+                else None
+            ),
         )
         payload["goal_id"] = args.goal_id
         payload["path_recorded"] = False

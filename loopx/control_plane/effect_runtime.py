@@ -291,9 +291,10 @@ def _runtime_server_path() -> Path:
 def _node_executable() -> str:
     status, executable, _version = _probe_node()
     if status != "ready" or executable is None:
-        raise RuntimeError(
+        raise EffectRuntimeStartupError(
             f"LoopX Effect runtime requires Node.js {MINIMUM_NODE_VERSION_TEXT} "
-            "or newer"
+            "or newer",
+            diagnostic_code="node_unavailable",
         )
     return executable
 
@@ -606,10 +607,10 @@ def effect_runtime_request(
     request_id = str(uuid.uuid4())
     last_error: OSError | RuntimeError | None = None
     for attempt in range(2 if retry_safe else 1):
-        info = _read_info(info_path, fingerprint=fingerprint)
-        if info is None:
-            info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
         try:
+            info = _read_info(info_path, fingerprint=fingerprint)
+            if info is None:
+                info = _start_runtime(fingerprint=fingerprint, info_path=info_path)
             return _request_with_info(
                 info,
                 request_id=request_id,
@@ -617,9 +618,13 @@ def effect_runtime_request(
                 params=params,
                 timeout=timeout,
             )
-        except EffectRuntimeRejected:
-            raise
         except EffectRuntimeRemoteError:
+            raise
+        except EffectRuntimeStartupError as exc:
+            last_error = exc
+            if attempt == 0 and retry_safe:
+                info_path.unlink(missing_ok=True)
+                continue
             raise
         except (OSError, RuntimeError) as exc:
             last_error = exc
@@ -627,7 +632,10 @@ def effect_runtime_request(
                 info_path.unlink(missing_ok=True)
                 continue
             break
-    raise RuntimeError("TypeScript Effect runtime request failed") from last_error
+    raise EffectRuntimeStartupError(
+        "TypeScript Effect runtime request failed",
+        diagnostic_code="runtime_request_failed",
+    ) from last_error
 
 
 def effect_runtime_result(

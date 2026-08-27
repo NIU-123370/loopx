@@ -9,33 +9,32 @@ import sys
 import tempfile
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from loopx.extensions.lark.event_collector import (  # noqa: E402
+from loopx.cli_commands.lark_inbox import (
+    _collector_permissions,
+)
+from loopx.extensions.lark import (
+    LARK_COLLECTOR_PERMISSION,
+    LARK_REPLY_PERMISSION,
+)
+from loopx.extensions.lark.event_collector import (
     inspect_lark_event_collector,
     install_lark_event_collector,
     plan_lark_event_collector,
 )
-from loopx.extensions.lark.event_collector_runtime import (  # noqa: E402
+from loopx.extensions.lark.event_collector_runtime import (
     add_lark_event_received_reaction,
     enrich_lark_event_reply_context,
     lark_event_requires_reply_context_lookup,
     run_lark_event_collector,
 )
-from loopx.extensions.lark.event_inbox import (  # noqa: E402
+from loopx.extensions.lark.event_inbox import (
     project_lark_event_inbox_urgency,
 )
-from loopx.extensions.lark.inbox_reactions import (  # noqa: E402
+from loopx.extensions.lark.inbox_reactions import (
     lark_inbox_reaction_receipts,
-)
-from loopx.cli_commands.lark_inbox import (  # noqa: E402
-    _collector_permissions,
-)
-from loopx.extensions.lark import (  # noqa: E402
-    LARK_COLLECTOR_PERMISSION,
-    LARK_REPLY_PERMISSION,
 )
 
 
@@ -166,9 +165,9 @@ with tempfile.TemporaryDirectory(prefix="loopx-lark-collector-") as raw:
         )
         assert preview["status"] == "preview_ready", preview
         assert preview["would_write_service"] is True, preview
-        assert calls == [
-            [str(node), str(lark_cli), "event", "consume", "--help"]
-        ], calls
+        assert calls == [[str(node), str(lark_cli), "event", "consume", "--help"]], (
+            calls
+        )
 
         installed = install_lark_event_collector(
             project=project,
@@ -195,14 +194,17 @@ with tempfile.TemporaryDirectory(prefix="loopx-lark-collector-") as raw:
         assert service_argv[service_argv.index("--lark-cli-executable") + 1] == str(
             lark_cli
         ), service_argv
-        assert service_argv[service_argv.index("--node-executable") + 1] == str(
-            node
-        ), service_argv
-        assert "event" not in service_argv and "consume" not in service_argv, service_argv
+        assert service_argv[service_argv.index("--node-executable") + 1] == str(node), (
+            service_argv
+        )
+        assert "event" not in service_argv and "consume" not in service_argv, (
+            service_argv
+        )
 
         direct_event = {
             "message_id": "om_direct_fixture",
             "content": "@Project Review Bot 请处理这个问题",
+            "mentioned": True,
         }
         assert not lark_event_requires_reply_context_lookup(
             direct_event,
@@ -237,6 +239,7 @@ with tempfile.TemporaryDirectory(prefix="loopx-lark-collector-") as raw:
             profile="project-review-bot",
             emoji_type="Get",
         )
+
         def timeout_runner(
             argv: list[str], **_: object
         ) -> subprocess.CompletedProcess[str]:
@@ -259,9 +262,9 @@ with tempfile.TemporaryDirectory(prefix="loopx-lark-collector-") as raw:
             "reactions",
             "create",
         ], reaction_calls
-        assert json.loads(
-            reaction_calls[0][reaction_calls[0].index("--data") + 1]
-        ) == {"reaction_type": {"emoji_type": "Get"}}, reaction_calls
+        assert json.loads(reaction_calls[0][reaction_calls[0].index("--data") + 1]) == {
+            "reaction_type": {"emoji_type": "Get"}
+        }, reaction_calls
         invalid_inbox = json.loads(inbox_config.read_text())
         invalid_inbox["reply"]["enabled"] = False
         inbox_config.write_text(json.dumps(invalid_inbox), encoding="utf-8")
@@ -315,7 +318,9 @@ with tempfile.TemporaryDirectory(prefix="loopx-lark-collector-") as raw:
         }
         lookup_calls: list[list[str]] = []
 
-        def lookup_runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        def lookup_runner(
+            argv: list[str], **_: object
+        ) -> subprocess.CompletedProcess[str]:
             lookup_calls.append(list(argv))
             message_id = argv[argv.index("--message-ids") + 1]
             return subprocess.CompletedProcess(
@@ -416,6 +421,8 @@ if "event" in args and "consume" in args:
             "message_id": "om_runtime_direct",
             "create_time": "2026-07-16T00:00:00Z",
             "content": "@Project Review Bot 能处理吗？",
+            "mentioned": True,
+            "chat_id": "oc_private_fixture_chat",
         },
         {
             "schema_version": "lark_event_inbox_event_v0",
@@ -423,6 +430,7 @@ if "event" in args and "consume" in args:
             "message_id": "om_runtime_ordinary",
             "create_time": "2026-07-16T00:01:00Z",
             "content": "Project Review Bot 群里的普通问题为什么会这样？",
+            "chat_id": "oc_private_fixture_chat",
         },
         {
             "schema_version": "lark_event_inbox_event_v0",
@@ -430,6 +438,7 @@ if "event" in args and "consume" in args:
             "message_id": "om_runtime_reply",
             "create_time": "2026-07-16T00:02:00Z",
             "content": "这是不带 at 的回复",
+            "chat_id": "oc_private_fixture_chat",
         },
     ]
     for event in events:

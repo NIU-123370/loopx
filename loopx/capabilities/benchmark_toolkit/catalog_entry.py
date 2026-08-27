@@ -79,11 +79,12 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         {
             "command": (
                 "loopx benchmark experiment-board-show --goal-id <goal-id> "
-                "--format json"
+                "[--four-arm-contract-json <compact-contract.json>] --format json"
             ),
             "purpose": (
                 "Read baseline, treatment, explore, countability, effort, and "
-                "insight status before selecting or launching another arm."
+                "insight status before selecting or launching another arm; an "
+                "explicit four-arm contract also projects conditional effects."
             ),
             "write_boundary": "read-only project-local public-safe domain state",
         },
@@ -279,7 +280,7 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         "board_commands": {
             "read": (
                 "loopx benchmark experiment-board-show --goal-id <goal-id> "
-                "--format json"
+                "[--four-arm-contract-json <compact-contract.json>] --format json"
             ),
             "preview": (
                 "loopx benchmark experiment-board-upsert --goal-id <goal-id> "

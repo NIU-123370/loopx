@@ -60,7 +60,6 @@ availability and maturity in the installed release.
 | You need to... | Capability path |
 | --- | --- |
 | Preserve questions, hypotheses, experiments, findings, and composition frontiers across a long exploration | [Explore](explore/README.md) ([中文版](explore/README.zh-CN.md)) |
-| Run one bounded multi-agent research question with role-scoped evidence and terminal decisions | [Auto Research](auto_research/README.md) |
 | Separate current evidence, advisory proposals, and verified outcomes before making a decision | [Decision Context](decision_context/README.md) ([中文](decision_context/README.zh-CN.md)) |
 | Recall a settled autonomous turn without manufacturing a new user prompt | [Agent Turn Recall](agent_turn_recall/README.md) |
 | Add optional, provider-neutral preference recall without making memory the state authority | [Semantic Preference](semantic_preference/README.md) |

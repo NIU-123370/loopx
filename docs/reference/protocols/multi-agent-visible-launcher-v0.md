@@ -24,7 +24,7 @@ kernel owns runner/TUI/tick/todo/evidence/status mechanics.
 
 ## Kernel Module
 
-The reusable control-plane kernel lives in `loopx/control_plane/agents/multi_agent/`.
+The reusable control-plane kernel lives in `demo/multi_agent/`.
 Domain capabilities should depend on that package for:
 
 - `tui_multi_agent_runner_contract_v0`;
@@ -36,7 +36,7 @@ Domain capabilities should depend on that package for:
 - runtime scripts for scoped LoopX wrappers, pane-local A2A ticks, and Codex
   TUI exec.
 
-The host launcher in `loopx/visible_multi_agent_launcher.py` owns tmux process
+The host launcher in `demo/visible_multi_agent_launcher.py` owns tmux process
 execution and Codex TUI acceptance only. Auto-research, benchmark demos, and
 future custom teams should not duplicate runner schema, role-profile
 normalization, attach/stop semantics, pane-local tick scripts, or machine JSON

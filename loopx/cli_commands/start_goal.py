@@ -12,6 +12,10 @@ from ..bootstrap_command_pack import (
     build_start_goal_host_surface_selection_packet,
     render_start_goal_guided_markdown,
 )
+from ..control_plane.effect_runtime import (
+    EffectRuntimeStartupError,
+    MINIMUM_NODE_VERSION_TEXT,
+)
 from ._host_thread import current_host_thread_id
 
 PrintPayload = Callable[
@@ -26,6 +30,79 @@ _CAPABILITY_ROUTE_PREFIX = re.compile(
     r"(?P<remainder>[\s\S]*)\Z"
 )
 _FINE_GRAINED_PREFIX = re.compile(r"\A--fine-grained(?P<remainder>(?:\s[\s\S]*)?)\Z")
+
+_EFFECT_RUNTIME_STARTUP_REMEDIATION_BY_CODE = {
+    "node_unavailable": (
+        f"Install or activate Node.js {MINIMUM_NODE_VERSION_TEXT} or newer "
+        "on PATH, then run `loopx doctor --deep` and retry "
+        "`loopx start-goal --guided`."
+    ),
+    "startup_lock_timeout": (
+        "Another LoopX TypeScript control-plane runtime may be starting. Run "
+        "`loopx doctor --deep`, wait for the active startup to settle, and retry "
+        "`loopx start-goal --guided`."
+    ),
+    "runtime_launch_failed": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If the "
+        "runtime still cannot start, repair or reinstall LoopX."
+    ),
+    "runtime_exited_before_ready": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If the "
+        "runtime exits again, repair or reinstall LoopX."
+    ),
+    "runtime_startup_timeout": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If "
+        "startup continues to time out, repair or reinstall LoopX."
+    ),
+    "runtime_request_failed": (
+        "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If "
+        "requests continue to fail, repair or reinstall LoopX."
+    ),
+}
+_EFFECT_RUNTIME_STARTUP_DEFAULT_REMEDIATION = (
+    "Run `loopx doctor --deep` and retry `loopx start-goal --guided`. If the "
+    "TypeScript control-plane runtime remains unavailable, repair or reinstall LoopX."
+)
+
+
+def _effect_runtime_startup_recommended_action(diagnostic_code: str) -> str:
+    return _EFFECT_RUNTIME_STARTUP_REMEDIATION_BY_CODE.get(
+        diagnostic_code,
+        _EFFECT_RUNTIME_STARTUP_DEFAULT_REMEDIATION,
+    )
+
+
+def _effect_runtime_startup_failure_payload(
+    exc: EffectRuntimeStartupError,
+) -> dict[str, object]:
+    diagnostic_code = getattr(exc, "diagnostic_code", "runtime_startup_failed")
+    return {
+        "ok": False,
+        "schema_version": "loopx_start_goal_guided_v0",
+        "error": "LoopX TypeScript control-plane runtime is unavailable",
+        "diagnostic_code": diagnostic_code,
+        "runtime_requirement": {
+            "runtime": "node",
+            "minimum_node_version": MINIMUM_NODE_VERSION_TEXT,
+            "required_for": ["start-goal", "control_plane"],
+        },
+        "recommended_action": _effect_runtime_startup_recommended_action(
+            diagnostic_code
+        ),
+    }
+
+
+def _render_start_goal_markdown(payload: dict[str, object]) -> str:
+    if payload.get("ok") is not False:
+        return render_start_goal_guided_markdown(payload)
+    lines = ["# Guided Start Goal", "", f"- error: `{payload.get('error')}`"]
+    for field in ("diagnostic_code", "recommended_action", "suggested_command"):
+        value = payload.get(field)
+        if not value:
+            continue
+        rendered = value if field == "recommended_action" else f"`{value}`"
+        lines.append(f"- {field}: {rendered}")
+    return "\n".join(lines) + "\n"
 
 
 def add_capability_route_argument(parser: argparse.ArgumentParser) -> None:
@@ -200,6 +277,8 @@ def _resolve_start_goal_input(args: argparse.Namespace) -> tuple[str, str | None
 def handle_start_goal_command(
     args: argparse.Namespace,
     print_payload: PrintPayload,
+    *,
+    runtime_root_arg: str | None = None,
 ) -> int:
     if not bool(getattr(args, "guided", False)):
         payload = {
@@ -208,7 +287,7 @@ def handle_start_goal_command(
             "error": "`loopx start-goal` currently requires --guided",
             "suggested_command": "loopx start-goal --guided --goal-text '<goal text>'",
         }
-        print_payload(payload, args.format, render_start_goal_guided_markdown)
+        print_payload(payload, args.format, _render_start_goal_markdown)
         return 2
     try:
         goal_text, capability_route, fine_grained = _resolve_start_goal_input(args)
@@ -222,40 +301,52 @@ def handle_start_goal_command(
                 "--slash-command-arguments='<exact /loopx arguments>'"
             ),
         }
-        print_payload(payload, args.format, render_start_goal_guided_markdown)
+        print_payload(payload, args.format, _render_start_goal_markdown)
         return 2
     display_name = args.display_name
     if not args.host_surface:
-        payload = build_start_goal_host_surface_selection_packet(
+        try:
+            payload = build_start_goal_host_surface_selection_packet(
+                project=Path(args.project),
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                thread_id=current_host_thread_id(args),
+                new_peer=bool(getattr(args, "new_peer", False)),
+                cli_bin=args.cli_bin,
+                goal_text=goal_text,
+                available_capabilities=args.available_capabilities,
+                capability_route=capability_route,
+                fine_grained=fine_grained,
+                include_command_pack_detail=bool(args.include_command_pack_detail),
+                display_name=display_name,
+                runtime_root_arg=runtime_root_arg,
+            )
+        except EffectRuntimeStartupError as exc:
+            payload = _effect_runtime_startup_failure_payload(exc)
+            print_payload(payload, args.format, _render_start_goal_markdown)
+            return 1
+        print_payload(payload, args.format, _render_start_goal_markdown)
+        return 0
+    try:
+        payload = build_start_goal_guided_packet(
             project=Path(args.project),
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             thread_id=current_host_thread_id(args),
             new_peer=bool(getattr(args, "new_peer", False)),
             cli_bin=args.cli_bin,
+            host_surface=args.host_surface,
             goal_text=goal_text,
             available_capabilities=args.available_capabilities,
             capability_route=capability_route,
             fine_grained=fine_grained,
             include_command_pack_detail=bool(args.include_command_pack_detail),
+            runtime_root_arg=runtime_root_arg,
             display_name=display_name,
         )
-        print_payload(payload, args.format, render_start_goal_guided_markdown)
-        return 0
-    payload = build_start_goal_guided_packet(
-        project=Path(args.project),
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        thread_id=current_host_thread_id(args),
-        new_peer=bool(getattr(args, "new_peer", False)),
-        cli_bin=args.cli_bin,
-        host_surface=args.host_surface,
-        goal_text=goal_text,
-        available_capabilities=args.available_capabilities,
-        capability_route=capability_route,
-        fine_grained=fine_grained,
-        include_command_pack_detail=bool(args.include_command_pack_detail),
-        display_name=display_name,
-    )
-    print_payload(payload, args.format, render_start_goal_guided_markdown)
+    except EffectRuntimeStartupError as exc:
+        payload = _effect_runtime_startup_failure_payload(exc)
+        print_payload(payload, args.format, _render_start_goal_markdown)
+        return 1
+    print_payload(payload, args.format, _render_start_goal_markdown)
     return 0

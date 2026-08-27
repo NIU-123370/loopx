@@ -45,6 +45,10 @@ from .experiment_board import (
     render_benchmark_experiment_board_markdown,
     upsert_benchmark_experiment_board_row,
 )
+from .factorial_contrast import (
+    BENCHMARK_FACTORIAL_CONTRAST_SCHEMA_VERSION,
+    build_benchmark_factorial_contrasts,
+)
 from .four_arm_contract import (
     BENCHMARK_FOUR_ARM_ATTESTATIONS,
     BENCHMARK_FOUR_ARM_CONTRACT_SCHEMA_VERSION,
@@ -105,14 +109,14 @@ from .native_codex_profile import (
     native_codex_profile_environment,
     render_native_codex_goal_prompt,
 )
-from .provider_gateway import (
-    RunnerOwnedProviderGateway,
-    serve_runner_owned_provider_gateway,
-)
 from .plan_fidelity import (
     BENCHMARK_PLAN_FIDELITY_SCHEMA_VERSION,
     BenchmarkPlanRole,
     build_benchmark_plan_fidelity_receipt,
+)
+from .provider_gateway import (
+    RunnerOwnedProviderGateway,
+    serve_runner_owned_provider_gateway,
 )
 from .public_trajectory import (
     NATIVE_GOAL_LIFECYCLE_SCHEMA_VERSION,
@@ -168,6 +172,7 @@ __all__ = [
     "BENCHMARK_EXPERIMENT_BOARD_LEDGER_FILENAME",
     "BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION",
     "BENCHMARK_EXPERIMENT_BOARD_SCHEMA_VERSION",
+    "BENCHMARK_FACTORIAL_CONTRAST_SCHEMA_VERSION",
     "BENCHMARK_FOUR_ARM_ATTESTATIONS",
     "BENCHMARK_FOUR_ARM_CONTRACT_SCHEMA_VERSION",
     "BENCHMARK_FOUR_ARM_QUALIFICATION_SCOPE",
@@ -230,6 +235,7 @@ __all__ = [
     "build_benchmark_concurrency_config",
     "build_benchmark_concurrency_status",
     "build_benchmark_experiment_board",
+    "build_benchmark_factorial_contrasts",
     "build_benchmark_four_arm_contract",
     "build_benchmark_four_arm_contract_from_spec",
     "build_benchmark_integrity_qualification",
@@ -278,8 +284,8 @@ __all__ = [
     "run_native_goal_process_until_terminal",
     "run_native_goal_turn",
     "run_native_goal_until_terminal",
-    "serve_runner_owned_provider_gateway",
     "select_exact_docker_container",
+    "serve_runner_owned_provider_gateway",
     "start_native_goal_turn",
     "upsert_benchmark_experiment_board_row",
     "validate_run_permission_policy",

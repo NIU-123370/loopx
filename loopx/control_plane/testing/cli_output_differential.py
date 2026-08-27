@@ -8,6 +8,7 @@ from ..quota.turn_envelope import (
     ACTION_SIGNATURE_COVERAGE_V0,
     ACTION_SIGNATURE_COVERAGE_V1,
     ACTION_SIGNATURE_COVERAGE_V2,
+    ACTION_SIGNATURE_COVERAGE_V3,
 )
 
 
@@ -16,6 +17,11 @@ CLI_OUTPUT_FIXTURE_CONTRACT_VERSION = "loopx_cli_output_public_fixture_v0"
 CLI_OUTPUT_DIFFERENTIAL_SCHEMA_VERSION = "loopx_cli_output_differential_v0"
 ACTION_PORTFOLIO_SCHEMA_VERSION_V0 = "quota_action_portfolio_v0"
 ACTION_PORTFOLIO_SCHEMA_VERSION_V1 = "quota_action_portfolio_v1"
+ACTION_PORTFOLIO_SCHEMA_VERSION_V2 = "quota_action_portfolio_v2"
+PLANNING_HORIZON_SCHEMA_VERSION_V0 = "quota_planning_horizon_v0"
+PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0 = (
+    "todo_planning_inventory_detail_v0"
+)
 
 Metric = Literal["chars", "utf8_bytes", "lines", "compact_payload_chars"]
 
@@ -101,14 +107,37 @@ _GROWTH_ALLOWANCE_BY_POLICY: dict[str, GrowthAllowance] = {
     ),
 }
 
-# action_dimensions_v2 adds the bounded, executable fallback portfolio to the
-# signed hot path.  This allowance applies only while a base row migrates from
-# v0/v1 to v2; once v2 is the baseline, ordinary policy budgets apply again.
+# quota_action_portfolio_v1/v2 migrations add a bounded executable portfolio
+# and then inline the small action context needed to interpret each choice.
+# This allowance applies only to a declared schema transition; once v2 is the
+# baseline, ordinary policy budgets apply again.
 _ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
+    "chars": 1_600,
+    "utf8_bytes": 1_600,
+    "lines": 42,
+    "compact_payload_chars": 1_280,
+}
+
+# quota_planning_horizon_v0 adds one bounded read-only strategic context to the
+# default agent path and TurnEnvelope. This allowance applies only while the
+# schema and action-signature coverage move to v0/v3; after merge the candidate
+# becomes the new baseline and ordinary growth limits apply again.
+_PLANNING_HORIZON_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
+    "chars": 3_200,
+    "utf8_bytes": 3_200,
+    "lines": 84,
+    "compact_payload_chars": 2_800,
+}
+
+# todo_planning_inventory_detail_v0 adds planning/claim semantics only to the
+# explicit agent-Todo detail variants. The allowance is bound to the declared
+# none-to-v0 schema migration; after merge the ordinary cold-path budget
+# applies again.
+_PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
     "chars": 1_280,
     "utf8_bytes": 1_280,
     "lines": 36,
-    "compact_payload_chars": 896,
+    "compact_payload_chars": 1_024,
 }
 
 
@@ -156,6 +185,9 @@ def _action_signature_migration(
         (ACTION_SIGNATURE_COVERAGE_V0, ACTION_SIGNATURE_COVERAGE_V1),
         (ACTION_SIGNATURE_COVERAGE_V0, ACTION_SIGNATURE_COVERAGE_V2),
         (ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V2),
+        (ACTION_SIGNATURE_COVERAGE_V0, ACTION_SIGNATURE_COVERAGE_V3),
+        (ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V3),
+        (ACTION_SIGNATURE_COVERAGE_V2, ACTION_SIGNATURE_COVERAGE_V3),
     }
     if not (
         isinstance(base_coverages, list)
@@ -178,9 +210,18 @@ def _action_portfolio_schema_migration(
     allowed_migrations = {
         ((), (ACTION_PORTFOLIO_SCHEMA_VERSION_V0,)),
         ((), (ACTION_PORTFOLIO_SCHEMA_VERSION_V1,)),
+        ((), (ACTION_PORTFOLIO_SCHEMA_VERSION_V2,)),
         (
             (ACTION_PORTFOLIO_SCHEMA_VERSION_V0,),
             (ACTION_PORTFOLIO_SCHEMA_VERSION_V1,),
+        ),
+        (
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V0,),
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V2,),
+        ),
+        (
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V1,),
+            (ACTION_PORTFOLIO_SCHEMA_VERSION_V2,),
         ),
     }
     migration = (tuple(base_versions or []), tuple(candidate_versions or []))
@@ -188,6 +229,36 @@ def _action_portfolio_schema_migration(
         before = base_versions[0] if base_versions else "none"
         after = candidate_versions[0] if candidate_versions else "none"
         return f"{before} -> {after}"
+    return None
+
+
+def _planning_horizon_schema_migration(
+    base: dict[str, Any], candidate: dict[str, Any]
+) -> str | None:
+    base_versions = tuple(base.get("planning_horizon_schema_versions") or [])
+    candidate_versions = tuple(
+        candidate.get("planning_horizon_schema_versions") or []
+    )
+    if base_versions == () and candidate_versions == (
+        PLANNING_HORIZON_SCHEMA_VERSION_V0,
+    ):
+        return f"none -> {PLANNING_HORIZON_SCHEMA_VERSION_V0}"
+    return None
+
+
+def _planning_inventory_detail_schema_migration(
+    base: dict[str, Any], candidate: dict[str, Any]
+) -> str | None:
+    base_versions = tuple(
+        base.get("planning_inventory_detail_schema_versions") or []
+    )
+    candidate_versions = tuple(
+        candidate.get("planning_inventory_detail_schema_versions") or []
+    )
+    if base_versions == () and candidate_versions == (
+        PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0,
+    ):
+        return f"none -> {PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0}"
     return None
 
 
@@ -218,6 +289,28 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         if portfolio_schema_changed
         else None
     )
+    base_horizon_versions = base.get("planning_horizon_schema_versions")
+    candidate_horizon_versions = candidate.get("planning_horizon_schema_versions")
+    horizon_schema_changed = base_horizon_versions != candidate_horizon_versions
+    horizon_schema_migration = (
+        _planning_horizon_schema_migration(base, candidate)
+        if horizon_schema_changed
+        else None
+    )
+    base_inventory_detail_versions = base.get(
+        "planning_inventory_detail_schema_versions"
+    )
+    candidate_inventory_detail_versions = candidate.get(
+        "planning_inventory_detail_schema_versions"
+    )
+    inventory_detail_schema_changed = (
+        base_inventory_detail_versions != candidate_inventory_detail_versions
+    )
+    inventory_detail_schema_migration = (
+        _planning_inventory_detail_schema_migration(base, candidate)
+        if inventory_detail_schema_changed
+        else None
+    )
     portfolio_growth_migration = bool(
         output_format == "json"
         and (
@@ -229,6 +322,21 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 )
             )
         )
+    )
+    horizon_growth_migration = bool(
+        output_format == "json"
+        and (
+            horizon_schema_migration
+            or (
+                signature_migration
+                and signature_migration.endswith(
+                    f" -> {ACTION_SIGNATURE_COVERAGE_V3}"
+                )
+            )
+        )
+    )
+    inventory_detail_growth_migration = bool(
+        output_format == "json" and inventory_detail_schema_migration
     )
 
     deltas: dict[str, int | None] = {}
@@ -251,6 +359,18 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             allowance = max(
                 allowance,
                 _ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
+            )
+        if horizon_growth_migration:
+            allowance = max(
+                allowance,
+                _PLANNING_HORIZON_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
+            )
+        if inventory_detail_growth_migration:
+            allowance = max(
+                allowance,
+                _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE[
+                    metric
+                ],
             )
         deltas[metric] = delta
         allowances[metric] = allowance
@@ -287,6 +407,21 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         else:
             review_signals.append(
                 f"action_portfolio schema migrated: {portfolio_schema_migration}"
+            )
+    if horizon_schema_changed:
+        if horizon_schema_migration is None:
+            failures.append("planning_horizon schema coverage changed")
+        else:
+            review_signals.append(
+                f"planning_horizon schema migrated: {horizon_schema_migration}"
+            )
+    if inventory_detail_schema_changed:
+        if inventory_detail_schema_migration is None:
+            failures.append("planning inventory detail schema coverage changed")
+        else:
+            review_signals.append(
+                "planning inventory detail schema migrated: "
+                f"{inventory_detail_schema_migration}"
             )
 
     return {

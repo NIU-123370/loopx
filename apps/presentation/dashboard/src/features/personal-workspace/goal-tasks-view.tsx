@@ -139,14 +139,14 @@ export function GoalTasksView({
       <section className="personal-object-list">
         <header>
           <strong><i className="personal-kanban-dot tone-done" />已完成</strong>
-          <span>{doneAgentTodos.length}</span>
+          <span>{Math.max(goal.doneTodoCount ?? 0, doneAgentTodos.length)}</span>
         </header>
         {doneAgentTodos.map((todo) => (
           <button key={todo.todoId} onClick={() => onSelect({ item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId }, kind: "todo" })} type="button">
             <span className="is-done">✓</span><strong>{todo.text}</strong><small>{todo.claimedBy ?? goal.agentLabel ?? goal.agentId}</small>
           </button>
         ))}
-        {!doneAgentTodos.length ? <p className="personal-task-empty">还没有完成的任务。</p> : null}
+        {!doneAgentTodos.length ? <p className="personal-task-empty">{(goal.doneTodoCount ?? 0) > 0 ? `已完成 ${(goal.doneTodoCount ?? 0)} 项，近期完成明细由控制面按需投影。` : "还没有完成的任务。"}</p> : null}
       </section>
       </div>
       {isEmpty ? (

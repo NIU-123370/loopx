@@ -50,6 +50,10 @@ def test_host_materialization_installs_generated_loopx_entry_skill(
     assert "The CLI, not the model, owns parsing" in skill_text
     assert "Never split or recompose" in skill_text
     assert "never infer a route from issue/PR wording or URLs" in skill_text
+    assert "verified active LoopX Goal/Agent binding" in skill_text
+    assert "Do not call `start-goal` for an ordinary phase" in skill_text
+    assert "typed Todo/writeback path for the bound agent" in skill_text
+    assert "explicit new-Goal request" in skill_text
     assert "`ordered_steps` and `goal_start_contract` as authoritative" in skill_text
     assert "surface the exact pasteable gate" in skill_text
     assert "follow its exact CLI `interaction_contract` or quota command first" in skill_text
@@ -81,6 +85,8 @@ def test_host_materialization_can_bind_exact_managed_agent_surface(
     assert "The CLI, not the model, owns parsing" in skill_text
     assert "`ordered_steps` and `goal_start_contract` as authoritative" in skill_text
     assert "never infer a route" in skill_text
+    assert "verified active LoopX Goal/Agent binding" in skill_text
+    assert "Do not call `start-goal` for an ordinary phase" in skill_text
     assert "follow its exact CLI `interaction_contract` or quota command first" in skill_text
     assert "current Todo evidence and the next executable Todo" not in skill_text
     assert "generic Todos remain scheduling records" not in skill_text

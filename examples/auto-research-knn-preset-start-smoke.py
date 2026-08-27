@@ -13,16 +13,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.knn_demo_workspace import (  # noqa: E402
+from demo.auto_research.knn_demo_workspace import (  # noqa: E402
     materialize_knn_demo_workspace,
 )
-from loopx.capabilities.auto_research.demo_e2e import (  # noqa: E402
+from demo.auto_research.demo_e2e import (  # noqa: E402
     _seed_visible_demo_control_plane,
 )
-from loopx.capabilities.auto_research.demo_supervisor import (  # noqa: E402
+from demo.auto_research.demo_supervisor import (  # noqa: E402
     build_auto_research_demo_supervisor_plan,
 )
-from loopx.capabilities.auto_research.user_contract import (  # noqa: E402
+from demo.auto_research.user_contract import (  # noqa: E402
     build_auto_research_preset_context,
 )
 

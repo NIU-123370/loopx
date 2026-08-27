@@ -35,10 +35,10 @@ def assert_public_safe(payload: Any) -> None:
 
 def assert_three_layer_minimality() -> None:
     sys.path.insert(0, str(REPO_ROOT))
-    from loopx.capabilities.auto_research.demo_supervisor import (
+    from demo.auto_research.demo_supervisor import (
         build_auto_research_demo_supervisor_plan,
     )
-    from loopx.capabilities.auto_research.preset import AUTO_RESEARCH_PRESET_SCHEMA_VERSION
+    from demo.auto_research.preset import AUTO_RESEARCH_PRESET_SCHEMA_VERSION
 
     supervisor = build_auto_research_demo_supervisor_plan(goal_id=GOAL_ID)
     layering = supervisor["layer_minimality_contract"]
@@ -93,8 +93,8 @@ def assert_three_layer_minimality() -> None:
 
 def assert_headless_worker_loop_is_not_research_uplift() -> None:
     sys.path.insert(0, str(REPO_ROOT))
-    from loopx.capabilities.auto_research.demo_e2e import run_auto_research_demo_e2e
-    from loopx.capabilities.auto_research.human_view import render_auto_research_markdown
+    from demo.auto_research.demo_e2e import run_auto_research_demo_e2e
+    from demo.auto_research.human_view import render_auto_research_markdown
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)

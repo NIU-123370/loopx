@@ -56,7 +56,10 @@ next_real_step = "Keep explicit enablement bounded."
     )
 
     baseline = run_cli(runtime_root, "capability", "list")
-    assert [item["id"] for item in baseline["capabilities"]] == [
+    builtin_capabilities = [
+        item for item in baseline["capabilities"] if item["origin"] == "builtin"
+    ]
+    assert [item["id"] for item in builtin_capabilities] == [
         "benchmark-toolkit",
         "integration-branch-reconcile",
         "repository-change-window",
@@ -73,11 +76,11 @@ next_real_step = "Keep explicit enablement bounded."
         "content-ops",
         "value-connectors",
         "explore",
-        "auto-research",
+        "deep-research",
         "public-safe-outbound",
         "connector-registry",
     ]
-    assert all(item["provider_id"] == "loopx-core" for item in baseline["capabilities"])
+    assert all(item["provider_id"] == "loopx-core" for item in builtin_capabilities)
     value_summary = next(
         item for item in baseline["capabilities"] if item["id"] == "value-connectors"
     )

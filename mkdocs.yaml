@@ -112,7 +112,6 @@ nav:
       - Integration Branch: capabilities/integration-branch/README.md
       - Project Skill Delivery: capabilities/project-skill-delivery/README.md
       - Explore: capabilities/explore/README.md
-      - Auto Research: capabilities/auto-research/README.md
       - Decision Context: capabilities/decision-context/README.md
       - Agent Turn Recall: capabilities/agent-turn-recall/README.md
       - Semantic Preference: capabilities/semantic-preference/README.md

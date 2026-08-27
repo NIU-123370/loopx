@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from .decision_summary import compact_quota_decision, quota_decision_agent_id
@@ -8,22 +10,103 @@ from ..runtime.time import now_local_iso
 from ..scheduler.ack import (
     scheduler_backoff_packet,
 )
+from ..effect_runtime import _node_executable
 from ..scheduler.state import (
     CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
     CODEX_APP_SURFACE,
     normalize_scheduler_rrule,
-    scheduler_state_path,
-    load_scheduler_state,
-)
-from ..scheduler.heartbeat_commit import (
-    commit_scheduler_heartbeat,
-    scheduler_state_digest,
 )
 from ..todos.contract import normalize_todo_claimed_by
 
 
 QUOTA_SCHEDULER_ACK_CLASSIFICATION = "quota_scheduler_ack"
 QUOTA_SCHEDULER_FAILURE_CLASSIFICATION = "quota_scheduler_host_update_failure"
+
+
+class SchedulerHeartbeatCommitConflict(ValueError):
+    """A native scheduler transaction returned a public conflict receipt."""
+
+    def __init__(self, receipt: dict[str, Any]) -> None:
+        self.receipt = receipt
+        super().__init__(
+            str(receipt.get("reason") or "scheduler heartbeat commit conflicted")
+        )
+
+
+def _commit_scheduler_state_native(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str,
+    surface: str,
+    state_key: str,
+    outcome: str,
+    facts: dict[str, Any] | None,
+    ack: dict[str, Any] | None,
+    failure: dict[str, Any] | None,
+    execute: bool,
+) -> dict[str, Any]:
+    """Transport compact scheduler facts to the native TypeScript command."""
+    if outcome not in {"ack", "failure", "host_failure"}:
+        raise ValueError("scheduler heartbeat outcome must be 'ack' or 'failure'")
+    operation = "ack" if outcome == "ack" else "host_failure"
+    payload: dict[str, Any] = {
+        "schema_version": "loopx_scheduler_heartbeat_host_facts_v0",
+        "operation": operation,
+        "runtime_root": str(runtime_root),
+        "goal_id": goal_id,
+        "agent_id": agent_id,
+        "surface": surface,
+        "state_key": state_key,
+        "execute": execute,
+    }
+    payload.update(facts or {})
+    if ack:
+        payload["ack"] = dict(ack)
+    if failure:
+        payload["failure"] = dict(failure)
+    command = [
+        _node_executable(),
+        "--no-warnings",
+        "--experimental-strip-types",
+        str(Path(__file__).resolve().parents[1] / "scheduler" / "heartbeat_commit_cli.ts"),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            input=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("native scheduler heartbeat command failed") from exc
+    raw = completed.stdout.strip().splitlines()
+    if not raw:
+        detail = completed.stderr.strip() or "native scheduler heartbeat returned no JSON"
+        raise RuntimeError(detail)
+    try:
+        result = json.loads(raw[-1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("native scheduler heartbeat returned malformed JSON") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("native scheduler heartbeat result must be an object")
+    if completed.returncode != 0:
+        if result.get("status") == "conflict":
+            raise SchedulerHeartbeatCommitConflict(result)
+        error = result.get("error")
+        message = (
+            result.get("message")
+            or result.get("reason")
+            or (error.get("message") if isinstance(error, dict) else None)
+            or "native scheduler heartbeat rejected"
+        )
+        raise ValueError(str(message))
+    if result.get("status") not in {"written", "replayed", "skipped", "preview"}:
+        raise RuntimeError("native scheduler heartbeat result has an invalid status")
+    return result
 
 
 def _commit_scheduler_state(
@@ -34,38 +117,23 @@ def _commit_scheduler_state(
     surface: str,
     state_key: str,
     outcome: str,
-    state: dict[str, Any] | None = None,
     facts: dict[str, Any] | None = None,
     ack: dict[str, Any] | None = None,
     failure: dict[str, Any] | None = None,
     execute: bool = True,
 ) -> dict[str, Any]:
-    current = load_scheduler_state(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        surface=surface,
-        state_key=state_key,
-    )
-    result = commit_scheduler_heartbeat(
+    return _commit_scheduler_state_native(
         runtime_root=runtime_root,
         goal_id=goal_id,
         agent_id=agent_id,
         surface=surface,
         state_key=state_key,
         outcome=outcome,
-        state=state,
         facts=facts,
         ack=ack,
         failure=failure,
-        expected_state_digest=scheduler_state_digest(current),
         execute=execute,
     )
-    if result.get("status") == "conflict":
-        raise ValueError(
-            str(result.get("reason") or "scheduler heartbeat commit conflicted")
-        )
-    return dict(result)
 
 
 def _scheduler_hint_facts(
@@ -435,13 +503,6 @@ def record_quota_scheduler_ack_for_decision(
             use_current_hint=use_current_hint,
         )
 
-    state_path = scheduler_state_path(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=safe_agent_id,
-        surface=surface,
-        state_key=state_key,
-    )
     try:
         scheduler_commit = _commit_scheduler_state(
             runtime_root=runtime_root,
@@ -462,6 +523,20 @@ def record_quota_scheduler_ack_for_decision(
             },
             execute=execute,
         )
+    except SchedulerHeartbeatCommitConflict as exc:
+        payload = scheduler_ack_failure(
+            goal_id=goal_id,
+            agent_id=safe_agent_id,
+            execute=execute,
+            surface=surface,
+            state_key=state_key,
+            applied_rrule=applied_rrule,
+            reason=str(exc),
+            before=before,
+        )
+        payload["scheduler_commit"] = exc.receipt
+        payload["reason_code"] = exc.receipt.get("reason_code")
+        return _annotate_current_hint(payload, use_current_hint=use_current_hint)
     except ValueError as exc:
         return _annotate_current_hint(
             scheduler_ack_failure(
@@ -513,7 +588,7 @@ def record_quota_scheduler_ack_for_decision(
         "scheduler_ack_event": record["scheduler_ack_event"],
         "health_check": record["health_check"],
         "delivery_outcome": record["delivery_outcome"],
-        "scheduler_state_path": str(state_path),
+        "scheduler_state_path": str(scheduler_commit.get("path") or ""),
         "before": output_before,
         # Preserve the legacy CLI projection for a no-op ACK. Older callers
         # use `after` to carry the unchanged compact decision in this case.
@@ -637,13 +712,6 @@ def record_quota_scheduler_failure_for_decision(
         payload["mode"] = "scheduler-fail-current"
         payload["failed_rrule"] = target_rrule
         return payload
-    state_path = scheduler_state_path(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=safe_agent_id,
-        surface=surface,
-        state_key=state_key,
-    )
     try:
         scheduler_commit = _commit_scheduler_state(
             runtime_root=runtime_root,
@@ -661,6 +729,22 @@ def record_quota_scheduler_failure_for_decision(
             },
             execute=execute,
         )
+    except SchedulerHeartbeatCommitConflict as exc:
+        payload = scheduler_ack_failure(
+            goal_id=goal_id,
+            agent_id=safe_agent_id,
+            execute=execute,
+            surface=surface,
+            state_key=state_key,
+            applied_rrule=target_rrule,
+            reason=str(exc),
+            before=before,
+        )
+        payload["mode"] = "scheduler-fail-current"
+        payload["failed_rrule"] = target_rrule
+        payload["scheduler_commit"] = exc.receipt
+        payload["reason_code"] = exc.receipt.get("reason_code")
+        return payload
     except ValueError as exc:
         payload = scheduler_ack_failure(
             goal_id=goal_id,
@@ -721,7 +805,7 @@ def record_quota_scheduler_failure_for_decision(
             "scheduler_state": scheduler_state,
             "host_update_failure": failure_record,
         },
-        "scheduler_state_path": str(state_path),
+        "scheduler_state_path": str(scheduler_commit.get("path") or ""),
         "health_check": (
             "scheduler host update failure cached; repeated retained target/host "
             "pairs suppressed; no quota spend"

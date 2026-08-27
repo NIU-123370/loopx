@@ -14,15 +14,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.demo_e2e import run_auto_research_demo_e2e  # noqa: E402
-from loopx.capabilities.auto_research.demo_supervisor import (  # noqa: E402
+from demo.auto_research.demo_e2e import run_auto_research_demo_e2e  # noqa: E402
+from demo.auto_research.demo_supervisor import (  # noqa: E402
     build_auto_research_demo_supervisor_plan,
     build_visible_worker_turn_command,
 )
-from loopx.capabilities.auto_research.user_contract import (  # noqa: E402
+from demo.auto_research.user_contract import (  # noqa: E402
     build_auto_research_preset_context,
 )
-from loopx.visible_multi_agent_launcher import validate_worker_command  # noqa: E402
+from demo.visible_multi_agent_launcher import validate_worker_command  # noqa: E402
 
 
 GOAL_ID = "loopx-auto-research-visible-worker-hook-smoke"

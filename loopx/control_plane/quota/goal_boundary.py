@@ -6,8 +6,6 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ..reward_memory import reward_memory_goal_policy
-
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...execution_profile import execution_profile_outcome_floor
 from ...explore_graph import compact_explore_graph_policy
@@ -16,6 +14,8 @@ from ...orchestration import (
     compact_peer_task_coordination_policy,
 )
 from ...repository_identity import resolve_project_identity
+from ..operator_inbox_binding import operator_inbox_binding
+from ..reward_memory import reward_memory_goal_policy
 from ..todos.contract import (
     normalize_required_capabilities,
     normalize_required_write_scopes,
@@ -38,7 +38,9 @@ def quota_execution_profile_summary(value: Any) -> dict[str, Any] | None:
         else {}
     )
     if policy.get("small_scale_streak_threshold") is not None:
-        compact["small_scale_streak_threshold"] = policy.get("small_scale_streak_threshold")
+        compact["small_scale_streak_threshold"] = policy.get(
+            "small_scale_streak_threshold"
+        )
     floor = execution_profile_outcome_floor(value)
     if floor:
         outcome_markers = (
@@ -177,9 +179,7 @@ def _registry_boundary_projection(goal: Mapping[str, Any]) -> dict[str, Any]:
         boundary["available_capabilities"] = available_capabilities
     requires_approval_value = coordination.get("requires_parent_approval")
     requires_approval = (
-        requires_approval_value
-        if isinstance(requires_approval_value, list)
-        else []
+        requires_approval_value if isinstance(requires_approval_value, list) else []
     )
     if requires_approval:
         boundary["requires_parent_approval"] = [
@@ -205,9 +205,7 @@ def goal_boundary(
 ) -> dict[str, Any] | None:
     boundary = _registry_boundary_projection(goal)
     control_plane = (
-        goal.get("control_plane")
-        if isinstance(goal.get("control_plane"), dict)
-        else {}
+        goal.get("control_plane") if isinstance(goal.get("control_plane"), dict) else {}
     )
     issue_fix = (
         control_plane.get("issue_fix")
@@ -220,13 +218,9 @@ def goal_boundary(
         else {}
     )
     if reviewer_notification.get("enabled") is True:
-        boundary.setdefault("capabilities", {})[
-            "issue_fix_reviewer_notification"
-        ] = {
+        boundary.setdefault("capabilities", {})["issue_fix_reviewer_notification"] = {
             "enabled": True,
-            "config_pointer_registered": bool(
-                reviewer_notification.get("config_path")
-            ),
+            "config_pointer_registered": bool(reviewer_notification.get("config_path")),
         }
     agent_inboxes = (
         control_plane.get("lark_event_inboxes")
@@ -263,7 +257,25 @@ def goal_boundary(
         }
         project = Path(str(goal.get("repo") or "")).expanduser()
         config_path = str(lark_event_inbox.get("config_path") or "").strip()
-        if project.is_dir() and config_path and operator_inbox_urgency_projector:
+        binding = operator_inbox_binding(
+            project=project,
+            config_path=config_path,
+            expected_digest=lark_event_inbox.get("config_digest"),
+        )
+        inbox_capability["binding"] = binding
+        owner_binding_blocked = bool(
+            isinstance(agent_inbox, dict) and binding["attention_required"]
+        )
+        if owner_binding_blocked:
+            inbox_capability.pop("drain_command", None)
+            inbox_capability["urgency"] = {
+                "schema_version": "lark_event_inbox_urgency_v0",
+                "enabled": True,
+                "projection_status": "unavailable",
+                "blocker": "agent_lark_inbox_config_binding_drift",
+                "local_private_content_returned": False,
+            }
+        elif project.is_dir() and config_path and operator_inbox_urgency_projector:
             try:
                 urgency = operator_inbox_urgency_projector(
                     project=project,
@@ -340,9 +352,7 @@ def goal_boundary(
                 "config_runtime_route"
             )
             if isinstance(config_runtime_route, Mapping):
-                reward_capability["config_runtime_route"] = dict(
-                    config_runtime_route
-                )
+                reward_capability["config_runtime_route"] = dict(config_runtime_route)
         if agent_id is not None:
             reward_capability.update(
                 {
@@ -380,7 +390,9 @@ def goal_boundary(
         boundary["explore_graph"] = compact_explore_graph_policy(
             goal.get("explore_graph")
         )
-    spawn_policy = goal.get("spawn_policy") if isinstance(goal.get("spawn_policy"), dict) else None
+    spawn_policy = (
+        goal.get("spawn_policy") if isinstance(goal.get("spawn_policy"), dict) else None
+    )
     if spawn_policy is not None:
         orchestration = compact_orchestration_policy(spawn_policy)
         boundary["orchestration"] = orchestration
@@ -400,17 +412,23 @@ def goal_boundary(
         if not isinstance(policy_source, dict):
             continue
             break
-    if isinstance(project_asset_source, dict) and project_asset_source.get("project_asset"):
+    if isinstance(project_asset_source, dict) and project_asset_source.get(
+        "project_asset"
+    ):
         project_asset = project_asset_source.get("project_asset")
         if isinstance(project_asset, dict):
             if project_asset.get("stop_condition"):
                 boundary["stop_condition"] = project_asset.get("stop_condition")
             if isinstance(project_asset.get("execution_profile"), dict):
-                boundary["execution_profile"] = quota_execution_profile_boundary_summary(
-                    project_asset["execution_profile"]
+                boundary["execution_profile"] = (
+                    quota_execution_profile_boundary_summary(
+                        project_asset["execution_profile"]
+                    )
                 )
             if isinstance(project_asset.get("orchestration"), dict):
-                boundary["orchestration"] = compact_orchestration_policy(project_asset["orchestration"])
+                boundary["orchestration"] = compact_orchestration_policy(
+                    project_asset["orchestration"]
+                )
     if boundary:
         boundary["rule"] = "stay_in_scope_or_stop"
         return boundary

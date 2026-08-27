@@ -23,7 +23,6 @@ from .periodic_report.catalog_entry import PERIODIC_REPORT_CATALOG_ENTRY
 from .content_ops.catalog_entry import CONTENT_OPS_CATALOG_ENTRY
 from .value_connectors.catalog_entry import VALUE_CONNECTORS_CATALOG_ENTRY
 from .explore.catalog_entry import EXPLORE_CATALOG_ENTRY
-from .auto_research.catalog_entry import AUTO_RESEARCH_CATALOG_ENTRY
 from .deep_research.catalog_entry import DEEP_RESEARCH_CATALOG_ENTRY
 from .public_safe_outbound.catalog_entry import PUBLIC_SAFE_OUTBOUND_CATALOG_ENTRY
 from .connector_registry.catalog_entry import CONNECTOR_REGISTRY_CATALOG_ENTRY
@@ -50,7 +49,6 @@ BUILTIN_CAPABILITIES: tuple[dict[str, Any], ...] = (
     CONTENT_OPS_CATALOG_ENTRY,
     VALUE_CONNECTORS_CATALOG_ENTRY,
     EXPLORE_CATALOG_ENTRY,
-    AUTO_RESEARCH_CATALOG_ENTRY,
     DEEP_RESEARCH_CATALOG_ENTRY,
     PUBLIC_SAFE_OUTBOUND_CATALOG_ENTRY,
     CONNECTOR_REGISTRY_CATALOG_ENTRY,

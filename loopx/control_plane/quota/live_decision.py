@@ -29,9 +29,10 @@ def bind_scheduler_followup_cli_routes(
     *,
     registry_path: Path,
     runtime_root: Path,
+    turn_instance_id: str | None = None,
     source: str = "quota_cli_invocation",
 ) -> None:
-    """Bind scheduler follow-ups to the registry/runtime that built the hint."""
+    """Bind scheduler follow-ups to the registry/runtime/Turn that built the hint."""
 
     scheduler_hint = payload.get("scheduler_hint")
     if not isinstance(scheduler_hint, dict):
@@ -62,15 +63,30 @@ def bind_scheduler_followup_cli_routes(
                 "runtime_root_bound": False,
             }
             continue
-        if cli_args[0] == "--registry":
-            continue
-        followup_hint["cli_args"] = [
-            "--registry",
-            str(registry_path.expanduser().resolve()),
-            "--runtime-root",
-            str(runtime_root.expanduser().resolve()),
-            *cli_args,
-        ]
+        bound_cli_args = list(cli_args)
+        if bound_cli_args[0] != "--registry":
+            bound_cli_args = [
+                "--registry",
+                str(registry_path.expanduser().resolve()),
+                "--runtime-root",
+                str(runtime_root.expanduser().resolve()),
+                *bound_cli_args,
+            ]
+        safe_turn_instance_id = str(turn_instance_id or "").strip()
+        if safe_turn_instance_id and "--turn-instance-id" not in bound_cli_args:
+            execute_index = (
+                bound_cli_args.index("--execute")
+                if "--execute" in bound_cli_args
+                else len(bound_cli_args)
+            )
+            bound_cli_args[execute_index:execute_index] = [
+                "--turn-instance-id",
+                safe_turn_instance_id,
+            ]
+            args_value = followup_hint.get("args")
+            if isinstance(args_value, dict):
+                args_value["turn_instance_id"] = safe_turn_instance_id
+        followup_hint["cli_args"] = bound_cli_args
         followup_hint["route_binding"] = {
             "schema_version": (
                 "scheduler_ack_cli_route_v0"
@@ -80,6 +96,7 @@ def bind_scheduler_followup_cli_routes(
             "source": source,
             "registry_bound": True,
             "runtime_root_bound": True,
+            "turn_instance_bound": bool(safe_turn_instance_id),
         }
 
 
@@ -93,9 +110,7 @@ def bind_action_selection_cli_routes(
 
     interaction_value = payload.get("interaction_contract")
     interaction: Mapping[str, Any] = (
-        interaction_value
-        if isinstance(interaction_value, Mapping)
-        else {}
+        interaction_value if isinstance(interaction_value, Mapping) else {}
     )
     cli_channel_value = interaction.get("cli_channel")
     if not isinstance(cli_channel_value, dict):
@@ -134,21 +149,22 @@ def build_live_quota_should_run_decision(
     agent_id: str | None,
     available_capabilities: list[str] | None,
     include_scheduler_detail: bool,
+    include_agent_todo_detail: bool = False,
     codex_app_current_rrule: str | None,
     registry_path: Path,
     runtime_root: Path,
     host_observation_resolver: HostObservationResolver | None = None,
     route_source: str = "quota_cli_invocation",
-    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None = None,
+    scheduler_execution_context: Mapping[str, Any]
+    | SchedulerExecutionContextResolution
+    | None = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     bounded_research_frontier_projector: BoundedResearchFrontierProjector | None = None,
     receipt_bound_todo_id: str | None = None,
     requested_action_todo_id: str | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
-    interaction_projection_hooks: Sequence[
-        InteractionProjectionHookRegistration
-    ]
+    interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
@@ -204,6 +220,7 @@ def build_live_quota_should_run_decision(
         agent_id=agent_id,
         available_capabilities=available_capabilities,
         include_scheduler_detail=include_scheduler_detail,
+        include_agent_todo_detail=include_agent_todo_detail,
         codex_app_current_rrule=observed_rrule,
         codex_app_automation_id=observed_automation_id or None,
         scheduler_execution_context=resolved_context,
@@ -215,9 +232,7 @@ def build_live_quota_should_run_decision(
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         turn_instance_id=turn_instance_id,
     )
-    hook_dispatch = dispatch_interaction_projection_hooks(
-        interaction_projection_hooks
-    )
+    hook_dispatch = dispatch_interaction_projection_hooks(interaction_projection_hooks)
     interaction = payload.get("interaction_contract")
     if isinstance(interaction, dict):
         projections = hook_dispatch["projections"]
@@ -225,14 +240,13 @@ def build_live_quota_should_run_decision(
             interaction.update(projections)
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {
-            key: value
-            for key, value in hook_dispatch.items()
-            if key != "projections"
+            key: value for key, value in hook_dispatch.items() if key != "projections"
         }
     bind_scheduler_followup_cli_routes(
         payload,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        turn_instance_id=turn_instance_id,
         source=route_source,
     )
     bind_action_selection_cli_routes(

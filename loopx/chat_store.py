@@ -138,6 +138,7 @@ class ChatSessionStore:
         self._session_locks: dict[str, threading.Lock] = {}
         self._event_lock = threading.RLock()
         self._event_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._event_cache_revision: dict[tuple[str, str], tuple[int, int, int] | None] = {}
         self._event_pending: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._event_flush_locks: dict[tuple[str, str], threading.Lock] = {}
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -638,6 +639,44 @@ class ChatSessionStore:
             ),
         )
 
+    def _settle_expired_queued_turns(
+        self,
+        session_id: str,
+        *,
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        """Persist queue expiry and return the queued Turns still eligible to run."""
+
+        live_turns: list[dict[str, Any]] = []
+        for turn in self.queued_turns(session_id):
+            expires_at = _instant(turn.get("expires_at"))
+            if expires_at is None or expires_at > now:
+                live_turns.append(turn)
+                continue
+            turn_id = str(turn["turn_id"])
+            completed = utc_now()
+            turn.update(
+                {
+                    "status": "timed_out",
+                    "error_code": "session_queue_expired",
+                    "error": "Queued Agent ingress expired before dispatch.",
+                    "completed_at": completed,
+                    "last_activity_at": completed,
+                }
+            )
+            _atomic_write_json(
+                self._turn_path(session_id, turn_id),
+                turn,
+                preserve_mode=True,
+            )
+            self.append_event(
+                session_id,
+                turn_id,
+                kind="turn.failed",
+                payload={"error_code": "session_queue_expired"},
+            )
+        return live_turns
+
     def claim_next_queued_turn(
         self,
         session_id: str,
@@ -669,33 +708,11 @@ class ChatSessionStore:
                     ):
                         return active
                     return None
-                now = datetime.now(timezone.utc)
-                for turn in self.queued_turns(session_id):
+                for turn in self._settle_expired_queued_turns(
+                    session_id,
+                    now=datetime.now(timezone.utc),
+                ):
                     turn_id = str(turn["turn_id"])
-                    expires_at = _instant(turn.get("expires_at"))
-                    if expires_at is not None and expires_at <= now:
-                        completed = utc_now()
-                        turn.update(
-                            {
-                                "status": "timed_out",
-                                "error_code": "session_queue_expired",
-                                "error": "Queued Agent ingress expired before dispatch.",
-                                "completed_at": completed,
-                                "last_activity_at": completed,
-                            }
-                        )
-                        _atomic_write_json(
-                            self._turn_path(session_id, turn_id),
-                            turn,
-                            preserve_mode=True,
-                        )
-                        self.append_event(
-                            session_id,
-                            turn_id,
-                            kind="turn.failed",
-                            payload={"error_code": "session_queue_expired"},
-                        )
-                        continue
                     if host_claim_id:
                         now_text = utc_now()
                         turn.update(
@@ -911,6 +928,12 @@ class ChatSessionStore:
                         "failed",
                     }:
                         raise RuntimeError("attached_session_turn_active")
+                live_queued_turns = self._settle_expired_queued_turns(
+                    session_id,
+                    now=datetime.now(timezone.utc),
+                )
+                if live_queued_turns:
+                    raise RuntimeError("attached_session_queue_pending")
                 now = utc_now()
                 session.update(
                     {
@@ -925,11 +948,24 @@ class ChatSessionStore:
 
     def _event_rows_locked(self, session_id: str, turn_id: str) -> list[dict[str, Any]]:
         key = (session_id, turn_id)
-        rows = self._event_cache.get(key)
-        if rows is None:
-            rows = _read_jsonl(self._event_path(session_id, turn_id))
+        path = self._event_path(session_id, turn_id)
+        revision = self._event_revision(path)
+        with self._event_lock:
+            if self._event_cache_revision.get(key) == revision and key in self._event_cache:
+                return self._event_cache[key]
+        rows = _read_jsonl(path)
+        with self._event_lock:
             self._event_cache[key] = rows
+            self._event_cache_revision[key] = revision
         return rows
+
+    @staticmethod
+    def _event_revision(path: Path) -> tuple[int, int, int] | None:
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return stat.st_ino, stat.st_size, stat.st_mtime_ns
 
     def _event_flush_lock(self, key: tuple[str, str]) -> threading.Lock:
         with self._event_lock:
@@ -945,18 +981,13 @@ class ChatSessionStore:
         buffered: bool = False,
     ) -> dict[str, Any]:
         key = (session_id, turn_id)
+        event = {
+            "schema_version": CHAT_EVENT_SCHEMA_VERSION,
+            "kind": str(kind),
+            "created_at": utc_now(),
+            "payload": payload,
+        }
         with self._event_lock:
-            rows = self._event_rows_locked(session_id, turn_id)
-            sequence = int(rows[-1].get("sequence") or 0) + 1 if rows else 1
-            event = {
-                "schema_version": CHAT_EVENT_SCHEMA_VERSION,
-                "event_id": str(sequence),
-                "sequence": sequence,
-                "kind": str(kind),
-                "created_at": utc_now(),
-                "payload": payload,
-            }
-            rows.append(event)
             self._event_pending.setdefault(key, []).append(event)
         if not buffered:
             self.flush_events(session_id, turn_id)
@@ -976,7 +1007,16 @@ class ChatSessionStore:
                     return flushed
                 try:
                     with exclusive_file_lock(path, agent_id="loopx-chat", operation="append_chat_events"):
+                        rows = self._event_rows_locked(session_id, turn_id)
+                        sequence = int(rows[-1].get("sequence") or 0) if rows else 0
+                        for event in pending:
+                            sequence += 1
+                            event["event_id"] = str(sequence)
+                            event["sequence"] = sequence
                         _append_jsonl_rows(path, pending)
+                        with self._event_lock:
+                            self._event_cache[key] = [*rows, *pending]
+                            self._event_cache_revision[key] = self._event_revision(path)
                 except Exception:
                     with self._event_lock:
                         later = self._event_pending.get(key, [])
@@ -989,8 +1029,20 @@ class ChatSessionStore:
             after = int(event_id or 0)
         except ValueError:
             after = 0
+        self.flush_events(session_id, turn_id)
+        key = (session_id, turn_id)
+        path = self._event_path(session_id, turn_id)
+        revision = self._event_revision(path)
         with self._event_lock:
-            rows = list(self._event_rows_locked(session_id, turn_id))
+            cached = self._event_cache.get(key)
+            rows = (
+                list(cached)
+                if cached is not None and self._event_cache_revision.get(key) == revision
+                else None
+            )
+        if rows is None:
+            with exclusive_file_lock(path, agent_id="loopx-chat", operation="read_chat_events"):
+                rows = list(self._event_rows_locked(session_id, turn_id))
         return [row for row in rows if int(row.get("sequence") or 0) > after]
 
     def compact_completed_events(self, *, older_than_hours: float = 24.0) -> int:
@@ -1012,23 +1064,24 @@ class ChatSessionStore:
             turn_id = turn_path.stem
             self.flush_events(session_id, turn_id)
             event_path = turn_path.with_name(f"{turn_path.stem}.events.jsonl")
-            with self._event_lock:
-                rows = list(self._event_rows_locked(session_id, turn_id))
-            retained = [
-                row for row in rows
-                if row.get("kind") not in {
-                    "answer.delta",
-                    "assistant.delta",
-                    "agent.phase",
-                    "turn.activity",
-                }
-            ]
-            if len(retained) == len(rows):
-                continue
             with exclusive_file_lock(event_path, agent_id="loopx-chat", operation="compact_chat_events"):
+                rows = self._event_rows_locked(session_id, turn_id)
+                retained = [
+                    row for row in rows
+                    if row.get("kind") not in {
+                        "answer.delta",
+                        "assistant.delta",
+                        "agent.phase",
+                        "turn.activity",
+                    }
+                ]
+                if len(retained) == len(rows):
+                    continue
                 _replace_jsonl(event_path, retained)
-            with self._event_lock:
-                self._event_cache[(session_id, turn_id)] = retained
+                with self._event_lock:
+                    key = (session_id, turn_id)
+                    self._event_cache[key] = retained
+                    self._event_cache_revision[key] = self._event_revision(event_path)
             compacted += 1
         return compacted
 

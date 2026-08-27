@@ -260,6 +260,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx auto-research", "purpose": "Project public-safe research frontiers."},
             {
+                "command": "loopx deepresearch",
+                "purpose": "Run a bounded, citation-auditable research ledger and report workflow.",
+            },
+            {
                 "command": "loopx agent-turn-recall",
                 "purpose": "Prepare goal-scoped memory guidance for one admitted autonomous agent turn.",
             },

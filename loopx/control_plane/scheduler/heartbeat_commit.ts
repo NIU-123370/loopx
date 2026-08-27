@@ -39,6 +39,10 @@ export const SCHEDULER_HEARTBEAT_COMMIT_RESULT_SCHEMA =
   "loopx_scheduler_heartbeat_commit_result_v0";
 export const SCHEDULER_HEARTBEAT_COMMIT_RECEIPT_SCHEMA =
   "scheduler_heartbeat_commit_receipt_v0";
+export const SCHEDULER_HEARTBEAT_HOST_FACTS_SCHEMA =
+  "loopx_scheduler_heartbeat_host_facts_v0";
+export const SCHEDULER_HEARTBEAT_COMMIT_ERROR_SCHEMA =
+  "loopx_scheduler_heartbeat_commit_error_v0";
 export const SCHEDULER_HEARTBEAT_COMMIT_OPERATIONS = [
   "ack",
   "host_failure",
@@ -75,6 +79,58 @@ export interface SchedulerHeartbeatCommitRequest {
   failure_kind: string | null;
   observed_host_rrule: string;
   prior_host_update_failures: JsonObject[];
+}
+
+/**
+ * Compact boundary payload used by non-TypeScript callers. State, CAS, and
+ * operation identity are intentionally absent: the native transaction owns
+ * those values and derives them from the scoped store and normalized facts.
+ */
+export interface SchedulerHeartbeatHostFactsRequest extends JsonObject {
+  schema_version: typeof SCHEDULER_HEARTBEAT_HOST_FACTS_SCHEMA;
+  operation?: SchedulerHeartbeatCommitOperation | "failure";
+  outcome?: "ack" | "failure" | "host_failure";
+  runtime_root: string;
+  goal_id: string;
+  agent_id: string;
+  surface?: string;
+  state_key?: string;
+  reset_token: string;
+  identity_signature: string;
+  progression_index: number;
+  progression_minutes: number[];
+  expected_rrule?: string | null;
+  target_rrule?: string | null;
+  applied_rrule?: string | null;
+  acknowledged_rrule?: string | null;
+  cadence_class?: string;
+  stale_tolerance_minutes?: number;
+  generated_at: string;
+  execute?: boolean;
+  ack_needed?: boolean | null;
+  apply_needed?: boolean | null;
+  source?: string;
+  host_match_observed?: boolean;
+  failure_kind?: string | null;
+  observed_host_rrule?: string | null;
+  observed_rrule?: string | null;
+  prior_host_update_failures?: JsonObject[];
+  /** Optional caller-owned id for events that must be distinct by contract. */
+  operation_id?: string;
+  /** Explicitly named alias for callers that distinguish stable event ids. */
+  stable_operation_id?: string;
+  /** Accepted as a compatibility alias for operation_id. */
+  effect_id?: string;
+}
+
+export interface SchedulerHeartbeatCommitError {
+  schema_version: typeof SCHEDULER_HEARTBEAT_COMMIT_ERROR_SCHEMA;
+  status: "error";
+  error: {
+    kind: string;
+    code: string;
+    message: string;
+  };
 }
 interface CommitMetadata {
   schema_version: typeof SCHEDULER_HEARTBEAT_COMMIT_RECEIPT_SCHEMA;
@@ -140,7 +196,7 @@ export function schedulerHeartbeatCommitStateDigest(
 export const schedulerStateDigest = schedulerHeartbeatCommitStateDigest;
 
 function requestDigest(request: SchedulerHeartbeatCommitRequest): string {
-  return sha256(canonicalJson({
+  const semanticFacts: JsonObject = {
     schema_version: request.schema_version,
     operation: request.operation,
     runtime_root: request.runtime_root,
@@ -156,17 +212,32 @@ function requestDigest(request: SchedulerHeartbeatCommitRequest): string {
     applied_rrule: request.applied_rrule,
     cadence_class: request.cadence_class,
     stale_tolerance_minutes: request.stale_tolerance_minutes,
-    generated_at: request.generated_at,
-    expected_state_digest: request.expected_state_digest,
-    execute: request.execute,
     ack_needed: request.ack_needed,
     apply_needed: request.apply_needed,
     source: request.source,
     host_match_observed: request.host_match_observed,
     failure_kind: request.failure_kind,
     observed_host_rrule: request.observed_host_rrule,
-    prior_host_update_failures: request.prior_host_update_failures,
-  }));
+  };
+  if (request.operation === "host_failure") {
+    // A host-failure event is distinct once the caller has observed the
+    // previous failure cache. Keeping this compact observation in the digest
+    // lets retries with the same facts replay while allowing the next failure
+    // to increment the retained pair count.
+    semanticFacts.prior_host_update_failures = request.prior_host_update_failures;
+  }
+  return sha256(canonicalJson(semanticFacts));
+}
+
+/**
+ * Derive the default idempotency key from semantic scheduler facts. Clock,
+ * CAS, and execute-mode observations are deliberately excluded so a retry
+ * after a lost response replays the original commit instead of conflicting.
+ */
+export function schedulerHeartbeatOperationId(
+  request: SchedulerHeartbeatCommitRequest,
+): string {
+  return `scheduler-heartbeat:${requestDigest(request).slice("sha256:".length)}`;
 }
 
 function textOrDefault(
@@ -264,7 +335,13 @@ function requestObject(value: unknown): SchedulerHeartbeatCommitRequest {
   const hostMatchObserved = request.host_match_observed === undefined
     ? false
     : requiredBoolean(request.host_match_observed, "host_match_observed");
-  const source = textOrDefault(request.source, "source", "quota_scheduler_ack");
+  const source = textOrDefault(
+    request.source,
+    "source",
+    operation === "host_failure"
+      ? "quota_scheduler_host_update_failure"
+      : "quota_scheduler_ack",
+  );
   const staleToleranceMinutes = request.stale_tolerance_minutes === undefined
     ? SCHEDULER_ACK_STALE_HINT_TOLERANCE_MINUTES
     : requiredInteger(request.stale_tolerance_minutes, "stale_tolerance_minutes");
@@ -320,6 +397,70 @@ function requestObject(value: unknown): SchedulerHeartbeatCommitRequest {
     observed_host_rrule: observedHostRrule,
     prior_host_update_failures: priorHostUpdateFailures,
   };
+}
+
+function optionalExternalOperationId(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  return requiredString(value, "operation_id").trim();
+}
+
+function hostFactsRequest(value: unknown): {
+  request: SchedulerHeartbeatCommitRequest;
+  operation_id: string | null;
+} {
+  const input = requiredObject(value, "scheduler heartbeat host facts");
+  if (input.schema_version !== SCHEDULER_HEARTBEAT_HOST_FACTS_SCHEMA) {
+    throw new EffectRuntimeRequestError(
+      "Scheduler heartbeat host facts schema mismatch",
+    );
+  }
+  const nestedScope = input.scope && typeof input.scope === "object" &&
+      !Array.isArray(input.scope)
+    ? input.scope as Record<string, unknown>
+    : {};
+  const nestedAck = input.ack && typeof input.ack === "object" &&
+      !Array.isArray(input.ack)
+    ? input.ack as Record<string, unknown>
+    : {};
+  const nestedFailure = input.failure && typeof input.failure === "object" &&
+      !Array.isArray(input.failure)
+    ? input.failure as Record<string, unknown>
+    : {};
+  const goalId = input.goal_id ?? nestedScope.goal_id;
+  const agentId = input.agent_id ?? nestedScope.agent_id;
+  const operationValue = input.operation ?? input.outcome;
+  const operation = operationValue === "failure" ||
+      operationValue === "host_failure"
+    ? "host_failure"
+    : operationValue === "ack"
+    ? "ack"
+    : operationValue;
+  const operationId = optionalExternalOperationId(
+    input.operation_id ?? input.stable_operation_id ?? input.effect_id,
+  );
+  const operationPayload = operation === "host_failure"
+    ? nestedFailure
+    : nestedAck;
+  const staleToleranceMinutes = input.stale_tolerance_minutes ??
+    operationPayload.stale_tolerance_minutes ??
+    operationPayload.stale_hint_tolerance_minutes;
+  // requestObject remains the single decoder for the full transaction shape.
+  // Host facts only fill state-derived CAS and effect identity below.
+  const request = requestObject({
+    ...input,
+    ...operationPayload,
+    schema_version: SCHEDULER_HEARTBEAT_COMMIT_REQUEST_SCHEMA,
+    operation,
+    effect_id: operationId ?? "scheduler-heartbeat-pending",
+    runtime_root: input.runtime_root,
+    goal_id: goalId,
+    agent_id: agentId,
+    surface: input.surface ?? nestedScope.surface,
+    state_key: input.state_key ?? nestedScope.state_key,
+    stale_tolerance_minutes: staleToleranceMinutes,
+    expected_state_digest: null,
+  });
+  return { request, operation_id: operationId };
 }
 
 function commitMetadata(state: JsonObject | null): CommitMetadata | null {
@@ -728,11 +869,17 @@ export async function evaluateSchedulerHeartbeatCommit(
       existing.reset_token === request.reset_token &&
       existing.identity_signature === request.identity_signature
     );
-    // A changed scheduler identity starts a fresh progression. Initial and
-    // identity-reset commits must begin at index zero; a stale monitor ACK is
-    // the exception to the identity-reset path, not to the initial index rule.
+    // A changed scheduler identity starts a fresh progression. An observed
+    // host match grants that reset authority only to an exact ACK: a host
+    // failure cannot also claim that the target RRULE is already applied.
+    // Stale monitor ACKs remain bound to the persisted identity. Initial and
+    // identity-reset commits must begin at index zero.
+    const exactHostMatchAck = request.operation === "ack" &&
+      request.host_match_observed &&
+      request.applied_rrule === request.expected_rrule;
     const identityReset = existing !== null && !identityMatches &&
-      !request.host_match_observed && !isStaleMonitorAck(request);
+      !isStaleMonitorAck(request) &&
+      (!request.host_match_observed || exactHostMatchAck);
     if (existing !== null && !identityMatches && !identityReset) {
       return result(
         request,
@@ -809,5 +956,39 @@ export async function evaluateSchedulerHeartbeatCommit(
       "scheduler heartbeat commit written",
       built.extra,
     );
+  });
+}
+
+/**
+ * Native transaction boundary for the scheduler facade exit. Callers provide
+ * only normalized scheduler/host observations; the transaction owns state
+ * loading, legacy migration, CAS calculation, operation identity, and the
+ * locked commit kernel.
+ */
+export async function evaluateSchedulerHeartbeatHostFacts(
+  value: unknown,
+): Promise<SchedulerHeartbeatCommitResult> {
+  const { request: facts, operation_id: externalOperationId } =
+    hostFactsRequest(value);
+  const loaded = await loadSchedulerState({
+    schema_version: SCHEDULER_STATE_STORE_REQUEST_SCHEMA,
+    runtime_root: facts.runtime_root,
+    goal_id: facts.scope.goalId,
+    agent_id: facts.scope.agentId,
+    surface: facts.scope.surface,
+    state_key: facts.scope.stateKey,
+    migrate_legacy: facts.execute,
+  });
+  const request: SchedulerHeartbeatCommitRequest = {
+    ...facts,
+    effect_id: externalOperationId ?? schedulerHeartbeatOperationId(facts),
+    expected_state_digest: schedulerHeartbeatCommitStateDigest(loaded.state),
+  };
+  return await evaluateSchedulerHeartbeatCommit({
+    ...request,
+    goal_id: request.scope.goalId,
+    agent_id: request.scope.agentId,
+    surface: request.scope.surface,
+    state_key: request.scope.stateKey,
   });
 }

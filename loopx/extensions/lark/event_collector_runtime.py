@@ -218,10 +218,7 @@ def _sender_identity(message: Mapping[str, Any]) -> tuple[str, str]:
         sender.get("sender_type") or message.get("sender_type") or ""
     ).strip()
     sender_id = str(
-        sender.get("id")
-        or sender.get("sender_id")
-        or message.get("sender_id")
-        or ""
+        sender.get("id") or sender.get("sender_id") or message.get("sender_id") or ""
     ).strip()
     return sender_type, sender_id
 
@@ -262,10 +259,12 @@ def enrich_lark_event_reply_context(
     # envelope fields. Message-level routing fields live on the message lookup
     # response, so copy them into the canonical event before deciding whether
     # this bot was addressed and which Goal Topic owns the message.
-    for field in ("content", "mentions", "mentioned"):
-        value = current.get(field)
-        if value not in (None, "", [], False):
-            enriched[field] = value
+    content = current.get("content")
+    if content not in (None, ""):
+        enriched["content"] = content
+    for field in ("mentions", "mentioned"):
+        if field in current:
+            enriched[field] = current[field]
     current_sender_type, current_sender_id = _sender_identity(current)
     if current_sender_id:
         enriched["sender_id"] = current_sender_id
@@ -306,6 +305,7 @@ def enrich_lark_event_reply_context(
 def _consume_argv(
     config: Mapping[str, Any], command_prefix: Sequence[str]
 ) -> list[str]:
+    chat_ids = [str(route["chat_id"]) for route in config["routes"]]
     return [
         *command_prefix,
         "--profile",
@@ -318,7 +318,7 @@ def _consume_argv(
         "--timeout",
         str(config["consume_timeout"]),
         "--jq",
-        _jq_projection(str(config["chat_id"])),
+        _jq_projection(chat_ids),
         "--quiet",
     ]
 
@@ -326,14 +326,19 @@ def _consume_argv(
 def lark_event_requires_reply_context_lookup(
     event: Mapping[str, Any], *, bot_display_name: str
 ) -> bool:
-    """Direct mentions are actionable without a provider readback."""
+    """Require provider context unless the stream carries a typed Bot mention."""
 
-    direct_attention = _event_attention_kind(
-        event,
-        bot_display_name=bot_display_name,
-        capture_scope="configured_chat_all",
+    provider_fields = {
+        key: event[key] for key in ("mentioned", "mentions") if key in event
+    }
+    return (
+        _event_attention_kind(
+            provider_fields,
+            bot_display_name=bot_display_name,
+            capture_scope="configured_chat_all",
+        )
+        is None
     )
-    return direct_attention not in {"direct_question", "direct_mention"}
 
 
 def _create_lark_event_received_reaction(
@@ -443,6 +448,7 @@ def run_lark_event_collector(
         if node_executable
         else _executable_prefix(lark_cli_executable)
     )
+    routes_by_chat = {str(route["chat_id"]): route for route in config["routes"]}
     process = subprocess.Popen(
         _consume_argv(config, command_prefix),
         stdout=subprocess.PIPE,
@@ -462,6 +468,7 @@ def run_lark_event_collector(
     reply_to_bot_count = 0
     received_reaction_count = 0
     received_reaction_failure_count = 0
+    routed_chat_ids: set[str] = set()
     profile_app_id: str | None = None
     profile_identity_checked = False
     try:
@@ -473,11 +480,14 @@ def run_lark_event_collector(
                 continue
             if not isinstance(payload, Mapping):
                 continue
+            chat_id = str(payload.get("chat_id") or "").strip()
+            route = routes_by_chat.get(chat_id)
+            if route is None:
+                continue
+            inbox = route["inbox"]
             needs_reply_lookup = lark_event_requires_reply_context_lookup(
                 payload,
-                bot_display_name=str(
-                    config["inbox"]["reply"].get("bot_display_name") or ""
-                ),
+                bot_display_name=str(inbox["reply"].get("bot_display_name") or ""),
             )
             if not needs_reply_lookup:
                 enriched = {
@@ -500,7 +510,7 @@ def run_lark_event_collector(
                         command_prefix=command_prefix,
                         profile=str(config["profile"]),
                         profile_app_id=profile_app_id,
-                        configured_chat_id=str(config["chat_id"]),
+                        configured_chat_id=chat_id,
                     )
                     if profile_app_id is not None
                     else {
@@ -513,16 +523,17 @@ def run_lark_event_collector(
             if not MESSAGE_ID_PATTERN.fullmatch(message_id):
                 continue
             with lark_inbox_reaction_lock(
-                inbox=config["inbox"]["inbox_path"],
+                inbox=inbox["inbox_path"],
                 message_id=message_id,
             ):
                 result = ingest_lark_event_inbox(
                     project=config["project"],
-                    config_path=config["event_inbox_config_ref"],
+                    config_path=route["event_inbox_config_ref"],
                     events=[
                         {
                             "schema_version": "lark_event_inbox_event_v0",
                             **enriched,
+                            "route_key": route["route_key"],
                         }
                     ],
                     execute=True,
@@ -530,21 +541,16 @@ def run_lark_event_collector(
                 if int(result.get("accepted_count") or 0) == 0:
                     continue
                 captured_count += 1
-                verified_count += int(
-                    enriched.get("reply_context_verified") is True
-                )
+                routed_chat_ids.add(chat_id)
+                verified_count += int(enriched.get("reply_context_verified") is True)
                 reply_to_bot_count += int(enriched.get("reply_to_bot") is True)
                 attention_kind = _event_attention_kind(
                     enriched,
-                    bot_display_name=str(
-                        config["inbox"]["reply"].get("bot_display_name")
-                        or ""
-                    ),
+                    bot_display_name=str(inbox["reply"].get("bot_display_name") or ""),
                     capture_scope="configured_chat_all",
                 )
                 received_reaction_emoji = str(
-                    config["inbox"]["reply"].get("received_reaction_emoji")
-                    or ""
+                    inbox["reply"].get("received_reaction_emoji") or ""
                 )
                 if attention_kind is not None and received_reaction_emoji:
                     reaction_id = _create_lark_event_received_reaction(
@@ -557,7 +563,7 @@ def run_lark_event_collector(
                     if reaction_id:
                         try:
                             record_lark_inbox_reaction(
-                                inbox=config["inbox"]["inbox_path"],
+                                inbox=inbox["inbox_path"],
                                 message_id=message_id,
                                 phase="received",
                                 reaction_id=reaction_id,
@@ -573,9 +579,7 @@ def run_lark_event_collector(
                             )
                             reaction_id = None
                     received_reaction_count += int(reaction_id is not None)
-                    received_reaction_failure_count += int(
-                        reaction_id is None
-                    )
+                    received_reaction_failure_count += int(reaction_id is None)
         returncode = process.wait()
     finally:
         if process.poll() is None:
@@ -589,9 +593,16 @@ def run_lark_event_collector(
             signal.signal(signum, handler)
     return {
         "ok": returncode == 0,
-        "schema_version": "lark_event_collector_run_v0",
+        "schema_version": (
+            "lark_event_collector_run_v1"
+            if config["schema_version"] == "lark_event_collector_config_v1"
+            else "lark_event_collector_run_v0"
+        ),
         "status": "completed" if returncode == 0 else "consumer_failed",
         "captured_count": captured_count,
+        "route_count": len(config["routes"]),
+        "routed_route_count": len(routed_chat_ids),
+        "multi_chat_routing": len(config["routes"]) > 1,
         "reply_context_verified_count": verified_count,
         "reply_to_bot_count": reply_to_bot_count,
         "received_reaction_count": received_reaction_count,
@@ -599,5 +610,7 @@ def run_lark_event_collector(
         "external_writes_performed": received_reaction_count > 0,
         "profile_identity_checked": profile_identity_checked,
         "profile_identity_verified": profile_app_id is not None,
+        "chat_ids_returned": False,
+        "local_paths_returned": False,
         "private_content_returned": False,
     }

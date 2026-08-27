@@ -10,7 +10,7 @@ contact_links:
     url: https://github.com/huangruiteng/loopx/security/advisories/new
     about: Privately report suspected unpatched vulnerabilities. Do not open a public issue.
   - name: Contributor task board
-    url: https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTOR_TASKS.md
+    url: https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md
     about: Start here for public, claimable work.
   - name: Current technical directions
     url: https://github.com/huangruiteng/loopx/blob/main/docs/project/technical-directions.md

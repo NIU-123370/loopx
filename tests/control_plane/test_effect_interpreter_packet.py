@@ -130,8 +130,14 @@ def test_effect_turn_keeps_monitor_quiet_around_decision_data_visible() -> None:
         "effective_action": "monitor_quiet_skip",
         "recommended_action": "quiet until the next material transition",
         "interaction_contract": {
+            "schema_version": "loopx_interaction_contract_v0",
             "mode": "monitor_quiet_skip",
             "user_channel": {"notify": "DONT_NOTIFY", "action_required": False},
+            "agent_channel": {
+                "must_attempt": False,
+                "delivery_allowed": False,
+                "quiet_noop_allowed": True,
+            },
             "cli_channel": {"next_cli_actions": []},
         },
         "work_lane_contract": {
@@ -173,7 +179,17 @@ def test_effect_turn_carries_scheduler_ack_and_failure_hints() -> None:
         "effective_action": "normal_run",
         "recommended_action": "advance the bounded segment",
         "interaction_contract": {
+            "schema_version": "loopx_interaction_contract_v0",
             "mode": "bounded_delivery",
+            "user_channel": {
+                "action_required": False,
+                "notify": "DONT_NOTIFY",
+            },
+            "agent_channel": {
+                "must_attempt": True,
+                "delivery_allowed": True,
+                "quiet_noop_allowed": False,
+            },
             "cli_channel": {
                 "next_cli_actions": [
                     "loopx refresh-state --goal-id effect-interpreter-fixture",

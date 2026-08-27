@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import loopx.bootstrap_command_pack as command_pack_module
 from loopx.bootstrap_command_pack import (
     GUIDED_COMMAND_PACK_PROJECTION_SCHEMA_VERSION,
     build_loopx_bootstrap_command_pack,
@@ -25,6 +26,7 @@ from loopx.cli_commands.todo_argument_validation import (
     validate_shared_todo_options,
     validate_todo_add_options,
 )
+from loopx.control_plane import effect_runtime
 
 GOAL_ID = "guided-projection-goal"
 AGENT_ID = "codex-guided-projection"
@@ -145,6 +147,122 @@ def _invoke_ark_start_goal_cli(
     payload = json.loads(output.getvalue())
     assert isinstance(payload, dict)
     return exit_code, payload
+
+
+def _block_effect_runtime_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    diagnostic_code: str = "node_unavailable",
+) -> None:
+    def unavailable(*_args: object, **_kwargs: object) -> object:
+        raise effect_runtime.EffectRuntimeStartupError(
+            "TypeScript Effect runtime could not serve the request",
+            diagnostic_code=diagnostic_code,
+        )
+
+    monkeypatch.setattr(
+        command_pack_module,
+        "effect_program_from_ordered_steps",
+        unavailable,
+    )
+
+
+@pytest.mark.parametrize(
+    ("diagnostic_code", "expected_action_fragment", "mentions_node_installation"),
+    [
+        ("node_unavailable", "Install or activate Node.js", True),
+        (
+            "startup_lock_timeout",
+            "wait for the active startup to settle",
+            False,
+        ),
+        ("runtime_launch_failed", "runtime still cannot start", False),
+        ("runtime_exited_before_ready", "runtime exits again", False),
+        ("runtime_startup_timeout", "startup continues to time out", False),
+        ("runtime_request_failed", "requests continue to fail", False),
+        ("future_runtime_diagnostic", "runtime remains unavailable", False),
+    ],
+)
+def test_cli_reports_effect_runtime_startup_failure_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostic_code: str,
+    expected_action_fragment: str,
+    mentions_node_installation: bool,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    _block_effect_runtime_startup(monkeypatch, diagnostic_code=diagnostic_code)
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--format",
+                "json",
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                AGENT_ID,
+                "--host-surface",
+                "shell",
+                "--goal-text",
+                GOAL_TEXT,
+            ]
+        )
+
+    raw_output = output.getvalue()
+    payload = json.loads(raw_output)
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert payload["schema_version"] == "loopx_start_goal_guided_v0"
+    assert payload["error"] == "LoopX TypeScript control-plane runtime is unavailable"
+    assert payload["diagnostic_code"] == diagnostic_code
+    assert payload["runtime_requirement"]["minimum_node_version"] == "22.6.0"
+    assert "loopx doctor --deep" in payload["recommended_action"]
+    assert expected_action_fragment in payload["recommended_action"]
+    assert ("Node.js" in payload["recommended_action"]) is mentions_node_installation
+    if not mentions_node_installation:
+        assert "Install or activate Node.js" not in payload["recommended_action"]
+    assert "Traceback" not in raw_output
+
+
+def test_cli_reports_effect_runtime_startup_failure_in_default_markdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    _block_effect_runtime_startup(monkeypatch)
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                AGENT_ID,
+                "--host-surface",
+                "shell",
+                "--goal-text",
+                GOAL_TEXT,
+            ]
+        )
+
+    raw_output = output.getvalue()
+    assert exit_code == 1
+    assert "# Guided Start Goal" in raw_output
+    assert "LoopX TypeScript control-plane runtime is unavailable" in raw_output
+    assert "diagnostic_code: `node_unavailable`" in raw_output
+    assert "loopx doctor --deep" in raw_output
+    assert "Traceback" not in raw_output
 
 
 def test_default_projection_preserves_host_actions_and_json_anchors(
@@ -767,13 +885,18 @@ def test_cli_codex_app_reuses_ambient_thread_binding(
 
 
 def test_start_goal_binds_selected_lane_before_todo_writeback(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
     source_registry = project / ".loopx" / "registry.json"
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
+    source_payload["common_runtime_root"] = str(runtime)
+    source_registry.write_text(
+        json.dumps(source_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
     global_payload = {
         **source_payload,
         "registry_role": "global-local",
@@ -783,8 +906,6 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
         json.dumps(global_payload, indent=2) + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime))
-
     first = build_start_goal_guided_packet(
         project=project,
         goal_id=GOAL_ID,
@@ -813,8 +934,9 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
 
     output = io.StringIO()
     bind_argv = shlex.split(bind_step["command"])
+    assert bind_argv[bind_argv.index("--runtime-root") + 1] == str(runtime)
     with contextlib.redirect_stdout(output):
-        exit_code = cli_main(["--runtime-root", str(runtime), *bind_argv[1:]])
+        exit_code = cli_main(bind_argv[1:])
     assert exit_code == 0, output.getvalue()
 
     second = build_start_goal_guided_packet(
@@ -833,6 +955,192 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
     assert "bind_thread_identity" not in {
         step["id"] for step in second["guided_transaction"]["ordered_steps"]
     }
+
+
+def test_fresh_agent_registration_preserves_guided_runtime_root(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    source_registry = project / ".loopx" / "registry.json"
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
+    source_payload["common_runtime_root"] = str(runtime)
+    source_payload["goals"][0]["coordination"]["registered_agents"] = []
+    source_registry.write_text(
+        json.dumps(source_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    global_payload = {
+        **source_payload,
+        "registry_role": "global-local",
+    }
+    global_payload["goals"][0]["source_registry"] = str(source_registry)
+    global_registry = runtime / "registry.global.json"
+    global_registry.write_text(
+        json.dumps(global_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    payload = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id="fresh-agent",
+        thread_id="thread-fresh-agent",
+        cli_bin="loopx",
+        host_surface="codex-app",
+        goal_text=GOAL_TEXT,
+        available_capabilities=["network"],
+    )
+
+    gate = payload["guided_transaction"]["identity_selection_gate"]
+    fresh_registration = gate["fresh_agent_registration"]
+    execute_command = fresh_registration["execute_command"]
+    rerun_command = fresh_registration["rerun_start_goal_command"]
+    execute_args = shlex.split(execute_command)
+    rerun_args = shlex.split(rerun_command)
+    assert execute_args[execute_args.index("--runtime-root") + 1] == str(runtime)
+    assert "--runtime-root" not in rerun_args
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(execute_args[1:])
+    assert exit_code == 0, output.getvalue()
+
+    registered_source = json.loads(source_registry.read_text(encoding="utf-8"))
+    registered_global = json.loads(global_registry.read_text(encoding="utf-8"))
+    assert registered_source["goals"][0]["coordination"]["registered_agents"] == [
+        "fresh-agent"
+    ]
+    assert registered_global["goals"][0]["coordination"]["registered_agents"] == [
+        "fresh-agent"
+    ]
+
+
+def test_start_goal_cli_preserves_explicit_runtime_root_in_registration_command(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    source_registry = project / ".loopx" / "registry.json"
+    runtime = project / "explicit-runtime"
+    runtime.mkdir()
+    source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
+    source_payload["goals"][0]["coordination"]["registered_agents"] = []
+    source_registry.write_text(
+        json.dumps(source_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    global_payload = {
+        **source_payload,
+        "registry_role": "global-local",
+        "common_runtime_root": str(runtime),
+    }
+    global_payload["goals"][0]["source_registry"] = str(source_registry)
+    global_registry = runtime / "registry.global.json"
+    global_registry.write_text(
+        json.dumps(global_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--runtime-root",
+                "explicit-runtime",
+                "--format",
+                "json",
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                "explicit-runtime-agent",
+                "--thread-id",
+                "thread-explicit-runtime",
+                "--host-surface",
+                "codex-app",
+                "--goal-text",
+                GOAL_TEXT,
+            ]
+        )
+    assert exit_code == 0, output.getvalue()
+
+    payload = json.loads(output.getvalue())
+    registration = payload["guided_transaction"]["identity_selection_gate"][
+        "fresh_agent_registration"
+    ]
+    execute_args = shlex.split(registration["execute_command"])
+    assert execute_args[execute_args.index("--runtime-root") + 1] == str(runtime)
+
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(execute_args[1:])
+    assert exit_code == 0, output.getvalue()
+
+    registered_source = json.loads(source_registry.read_text(encoding="utf-8"))
+    registered_global = json.loads(global_registry.read_text(encoding="utf-8"))
+    assert registered_source["goals"][0]["coordination"]["registered_agents"] == [
+        "explicit-runtime-agent"
+    ]
+    assert registered_global["goals"][0]["coordination"]["registered_agents"] == [
+        "explicit-runtime-agent"
+    ]
+
+
+def test_guided_state_commands_share_explicit_runtime_root(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    runtime = project / "explicit-runtime"
+    runtime.mkdir()
+
+    payload = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        thread_id="thread-runtime-consistency",
+        cli_bin="loopx",
+        host_surface="codex-app",
+        goal_text=GOAL_TEXT,
+        available_capabilities=["network"],
+        runtime_root_arg="explicit-runtime",
+        include_command_pack_detail=True,
+    )
+
+    expected_runtime = str(runtime)
+    command_pack = payload["command_pack"]
+    commands = command_pack["commands"]
+
+    def assert_runtime(command: str) -> None:
+        tokens = shlex.split(command)
+        runtime_index = tokens.index("--runtime-root")
+        assert tokens[runtime_index + 1] == expected_runtime
+
+    assert_runtime(command_pack["canonical_cli_command"])
+    for command_key in (
+        "goal_start_connect_if_needed",
+        "goal_start_bind_thread",
+        "goal_start_refresh_state",
+        "goal_start_host_loop_activation",
+        "goal_start_agent_onboard_recheck",
+        "goal_start_quota_should_run",
+    ):
+        command = commands[command_key]
+        assert command is not None
+        assert_runtime(command)
+
+    ordered_steps = payload["guided_transaction"]["ordered_steps"]
+    for step_id, command_key in (
+        ("write_ordered_todos", "command_template"),
+        ("refresh_state", "command"),
+        ("quota_guard", "command"),
+    ):
+        step = next(step for step in ordered_steps if step["id"] == step_id)
+        command = step[command_key]
+        assert command is not None
+        assert_runtime(command)
 
 
 def test_dsh_native_start_goal_binds_the_exact_same_session_lane(

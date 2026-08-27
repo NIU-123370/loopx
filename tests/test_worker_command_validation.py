@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from loopx.visible_multi_agent_launcher import (
+from demo.visible_multi_agent_launcher import (
     build_visible_multi_agent_payload_from_spec,
     validate_worker_command,
 )
@@ -78,11 +78,11 @@ def test_spec_builder_rejects_unsafe_worker_command() -> None:
 
 
 def test_auto_research_supervisor_visible_worker_turn_hook_is_safe() -> None:
-    from loopx.capabilities.auto_research.demo_supervisor import (
+    from demo.auto_research.demo_supervisor import (
         build_auto_research_demo_supervisor_plan,
         build_visible_worker_turn_command,
     )
-    from loopx.capabilities.auto_research.user_contract import (
+    from demo.auto_research.user_contract import (
         build_auto_research_preset_context,
     )
 

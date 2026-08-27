@@ -786,9 +786,20 @@ def assert_slot_spend_execute(payload: dict, next_should_run: dict, registry_bef
     forbidden = {"human_reward", "operator_gate", "write_control", "private_evidence", "agent_command"}
     assert forbidden.isdisjoint(record), record
     assert forbidden.isdisjoint(record["quota_event"]), record
-    index_lines = index_path.read_text(encoding="utf-8").splitlines()
-    assert any('"classification": "quota_slot_spent"' in line for line in index_lines), index_lines
-    assert any(f'"agent_id": "{SCOPED_AGENT_ID}"' in line for line in index_lines), index_lines
+    index_records = [
+        json.loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    quota_records = [
+        item
+        for item in index_records
+        if item.get("classification") == "quota_slot_spent"
+    ]
+    assert quota_records, index_records
+    assert any(
+        item.get("agent_id") == SCOPED_AGENT_ID for item in quota_records
+    ), index_records
 
     assert next_should_run["goal_id"] == "near-limit-half", next_should_run
     assert next_should_run["should_run"] is False, next_should_run

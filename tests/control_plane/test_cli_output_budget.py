@@ -770,6 +770,8 @@ def _mode_variant_commands(
         "heartbeat_prompt_full": common + ["heartbeat-prompt", "--full", *heartbeat],
         "todo_list_limited": common
         + ["todo", "list", "--goal-id", GOAL_ID, "--limit", "3"],
+        "todo_list_thin": common
+        + ["todo", "list", "--goal-id", GOAL_ID, "--thin"],
     }
 
 
@@ -828,6 +830,7 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_compact",
         "heartbeat_prompt_full",
         "todo_list_limited",
+        "todo_list_thin",
     }
     assert set(CLI_OUTPUT_MODE_VARIANT_BY_ID) == expected_variants
     assert manifest["mode_variant_count"] == len(expected_variants)
@@ -929,6 +932,13 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
     detail_payload = json.loads(detail_text)
     default_summary = default_payload["agent_todo_summary"]
     detail_summary = detail_payload["agent_todo_summary"]
+    assert "agent_todo_planning_inventory" not in default_payload
+    detail_inventory = detail_payload["agent_todo_planning_inventory"]
+    assert detail_inventory["schema_version"] == (
+        "todo_planning_inventory_detail_v0"
+    )
+    assert detail_inventory["item_detail_ref"] == "$.agent_todo_summary"
+    assert detail_inventory["items"]
     assert default_summary["payload_compaction"]["schema_version"] == (
         "quota_cli_todo_summary_compaction_v0"
     )
@@ -1521,6 +1531,66 @@ def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
         text=default_text,
         measurement=measure_cli_output(default_text, output_format="json"),
     )
+
+
+def test_todo_list_thin_reduces_crowded_output_and_keeps_default_unchanged(
+    tmp_path: Path,
+) -> None:
+    with _stable_budget_fixture_root(tmp_path / "todo-list-thin") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root,
+            SCENARIOS[1],
+        )
+        thin_command = _mode_variant_commands(
+            project=project,
+            runtime=runtime,
+            registry_path=registry_path,
+            state_file=state_file,
+            output_format="json",
+        )["todo_list_thin"]
+        cold_default_command = [
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime),
+            "--format",
+            "json",
+            "todo",
+            "list",
+            "--goal-id",
+            GOAL_ID,
+        ]
+        thin_exit_code, thin_text = _invoke_cli(thin_command)
+        default_exit_code, default_text = _invoke_cli(cold_default_command)
+
+    assert thin_exit_code == 0, thin_text
+    assert default_exit_code == 0, default_text
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_thin"]
+    measurement = measure_cli_output(thin_text, output_format="json")
+    assert_cli_output_mode_variant(
+        spec,
+        output_format="json",
+        text=thin_text,
+        measurement=measurement,
+    )
+    payload = json.loads(thin_text)
+    assert payload["thin"] is True
+    assert payload["todo_count"] == payload["matched_todo_count"] == 36
+    assert payload["returned_todo_count"] == len(payload["todos"]) == 2
+    assert payload["omitted_todo_count"] == 34
+    assert payload["todo_list_field_projection"]["view"] == (
+        "thin_explicit_view"
+    )
+    assert payload["todo_list_field_projection"]["item_limit_per_role"] == 2
+    assert "state_file" not in payload
+    assert "project" not in payload
+    assert len(thin_text) < len(default_text) * 0.45
+
+    default_payload = json.loads(default_text)
+    assert "thin" not in default_payload
+    assert "todo_list_field_projection" not in default_payload
+    assert default_payload["state_file"]
+    assert default_payload["project"]
 
 
 def test_todo_list_explicit_limit_bounds_monitor_and_blocker_lanes(

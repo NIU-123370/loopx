@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
@@ -10,9 +10,18 @@ from typing import Any
 
 from ...bootstrap_command_pack import build_start_goal_guided_packet
 from ..quota.cli_projection import compact_quota_should_run_cli_payload
-from ..quota.should_run import build_quota_should_run
 from ..quota.turn_envelope import quota_action_signature_document
 from ..work_items.interaction_contract import build_interaction_contract
+from .action_portfolio_scenarios import (
+    ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
+    ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
+    external_wait_fallback_scenario_source as _external_wait_fallback_scenario_source,
+    future_primary_fallback_scenario_source as _future_primary_fallback_scenario_source,
+    planning_horizon_strategic_context_scenario_source as _planning_horizon_strategic_context_scenario_source,
+    validate_external_wait_fallback_scenario as _validate_external_wait_fallback_scenario,
+    validate_future_primary_fallback_scenario as _validate_future_primary_fallback_scenario,
+    validate_planning_horizon_strategic_context_scenario as _validate_planning_horizon_strategic_context_scenario,
+)
 from .control_plane_composition_scenarios import (
     build_control_plane_composition_scenario_sources,
 )
@@ -23,6 +32,10 @@ from .model_behavior_qualification import (
     build_model_behavior_actor_request,
     model_behavior_semantic_contract_from_packet,
     run_model_behavior_qualification_arm,
+)
+from .model_behavior_action_oracles import (
+    PLANNING_HORIZON_REGRESSION_GATE_ACTION_ORACLE,
+    model_behavior_action_oracle_failures,
 )
 from .onboarding_model_behavior_qualification import (
     OnboardingActualBehaviorValidationError,
@@ -38,7 +51,6 @@ from .selected_todo_tool_behavior import (
     SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT,
     SELECTED_TODO_TOOL_FIXTURE_TODO_ID,
 )
-from .quota_fixtures import quota_status_payload, quota_todo_item
 
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_PORTFOLIO_SCHEMA_VERSION = (
     "actual_default_model_behavior_portfolio_v0"
@@ -47,8 +59,6 @@ ACTUAL_DEFAULT_MODEL_BEHAVIOR_CATALOG_SCHEMA_VERSION = (
     "actual_default_model_behavior_scenario_catalog_v0"
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS = 2
-ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID = "portfolio-goal"
-ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID = "codex-portfolio"
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 40_000
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_SCHEMA_VERSION = (
     "actual_default_model_behavior_contrast_v0"
@@ -73,6 +83,8 @@ class _ScenarioSpec:
     expected_route: str
     scenario_family: str = "core_contract"
     composition_dimensions: tuple[str, ...] = ()
+    semantic_contract_fields: tuple[str, ...] = ()
+    action_oracle: str | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +149,33 @@ _SCENARIOS = (
         "execute",
         "quota_action_portfolio",
         ("future_primary", "selected_fallback", "priority_preservation"),
+    ),
+    _ScenarioSpec(
+        "turn_external_wait_fallback",
+        "turn",
+        None,
+        "execute",
+        "quota_action_portfolio",
+        (
+            "typed_external_wait",
+            "selected_fallback",
+            "resume_condition_visibility",
+        ),
+    ),
+    _ScenarioSpec(
+        "turn_planning_horizon_strategic_context",
+        "turn",
+        None,
+        "execute",
+        "quota_planning_horizon",
+        (
+            "typed_source_facts",
+            "bounded_strategic_chain",
+            "attention_context",
+            "selection_authority",
+        ),
+        semantic_contract_fields=("planning_horizon",),
+        action_oracle=PLANNING_HORIZON_REGRESSION_GATE_ACTION_ORACLE,
     ),
     _ScenarioSpec(
         "turn_human_gate",
@@ -289,6 +328,13 @@ def actual_default_model_behavior_scenario_catalog() -> dict[str, Any]:
                 "expected_route": spec.expected_route,
                 "scenario_family": spec.scenario_family,
                 "composition_dimensions": list(spec.composition_dimensions),
+                "semantic_contract_required": bool(spec.semantic_contract_fields),
+                "semantic_contract_fields": list(spec.semantic_contract_fields),
+                **(
+                    {"action_oracle": spec.action_oracle}
+                    if spec.action_oracle is not None
+                    else {}
+                ),
                 "packet_view": (
                     "production_heartbeat_tool_loop"
                     if spec.actor_kind in _TOOL_ACTOR_KINDS
@@ -492,48 +538,6 @@ def _selected_todo_scenario_source() -> dict[str, Any]:
     return payload
 
 
-def _future_primary_fallback_scenario_source() -> dict[str, Any]:
-    future_primary = quota_todo_item(
-        todo_id="todo_future_primary",
-        index=1,
-        priority="P0",
-        title="Poll the primary target at its next due window.",
-        claimed_by=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
-        task_class="continuous_monitor",
-        action_kind="monitor",
-        target_key="public-fixture-primary",
-        cadence="daily",
-        next_due_at="2099-01-01T00:00:00Z",
-        watch_only=True,
-    )
-    ready_fallback = quota_todo_item(
-        todo_id="todo_ready_fallback",
-        index=2,
-        priority="P1",
-        title="Advance the ready bounded fallback slice.",
-        claimed_by=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
-    )
-    status = quota_status_payload(
-        goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
-        status="active",
-        agent_todo_items=[future_primary, ready_fallback],
-        recommended_action=future_primary["text"],
-        next_action=future_primary["text"],
-        coordination={
-            "agent_model": "peer_v1",
-            "registered_agents": [
-                ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID
-            ],
-        },
-        claim_scope_agent_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
-    )
-    return build_quota_should_run(
-        status,
-        goal_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
-        agent_id=ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
-    )
-
-
 def _terminal_settlement_scenario_source() -> dict[str, Any]:
     payload = _turn_scenario_source(human_gate=False)
     payload["selected_todo"] = {
@@ -714,6 +718,10 @@ def _build_actual_default_model_behavior_scenario_sources(
             "turn_future_primary_fallback": (
                 _future_primary_fallback_scenario_source()
             ),
+            "turn_external_wait_fallback": (_external_wait_fallback_scenario_source()),
+            "turn_planning_horizon_strategic_context": (
+                _planning_horizon_strategic_context_scenario_source()
+            ),
             "turn_human_gate": _turn_scenario_source(human_gate=True),
             "turn_quota_hot_path_compaction_regression": (
                 build_quota_hot_path_compaction_regression_source()
@@ -882,26 +890,179 @@ def _validate_required_vision_replan_scenario(
         raise ValueError("required-vision scenario must remain immediately runnable")
 
 
-def _validate_future_primary_fallback_scenario(
+def _validate_planning_horizon_model_scenario(
     source_packet: Mapping[str, Any],
 ) -> None:
-    signature = quota_action_signature_document(source_packet)
-    action = dict(signature.get("action") or {})
-    selected = dict(action.get("selected_todo") or {})
-    portfolio = dict(action.get("action_portfolio") or {})
-    primary = dict(portfolio.get("primary") or {})
-    unavailable = list(portfolio.get("unavailable_higher_priority") or [])
-    first_unavailable = dict(unavailable[0]) if unavailable else {}
+    """Validate the fixed strategic facts and the model-facing read contract."""
+
+    _validate_planning_horizon_strategic_context_scenario(source_packet)
+    semantics = model_behavior_semantic_contract_from_packet(
+        source_packet,
+        arm="full_packet",
+    )["planning_horizon"]
     if not (
-        selected.get("todo_id") == "todo_ready_fallback"
-        and primary.get("todo_id") == "todo_ready_fallback"
-        and first_unavailable.get("todo_id") == "todo_future_primary"
-        and first_unavailable.get("availability_reason")
-        == "scheduled_for_future"
+        semantics.get("present") is True
+        and semantics.get("selected_todo_id") == "todo_regression_gate"
+        and semantics.get("complete") is True
+        and semantics.get("truncated") is False
+        and semantics.get("relation_count") == 8
+        and semantics.get("relation_kinds") == ["successor", "resumes_when"]
     ):
         raise ValueError(
-            "future-primary scenario must execute the ready fallback while "
-            "preserving the unavailable higher-priority monitor"
+            "planning-horizon semantic summary must preserve the typed chain"
+        )
+
+
+def _validate_identity_scenario_contract(
+    spec: _ScenarioSpec,
+    source_packet: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> None:
+    if (
+        spec.scenario_id == "onboarding_agent_identity_gate"
+        and contract.get("agent_id") is not None
+    ):
+        raise ValueError("identity-gate scenario must not preselect an agent")
+    if (
+        spec.scenario_id == "onboarding_goal_selection_gate"
+        and contract.get("goal_id") is not None
+    ):
+        raise ValueError("goal-selection scenario must not preselect a goal")
+    if spec.scenario_id == "turn_selected_todo":
+        if not contract.get("selected_todo_id"):
+            raise ValueError("selected-todo scenario requires selected work")
+        selected = dict(source_packet.get("selected_todo") or {})
+        if not (
+            contract.get("selected_todo_id") == SELECTED_TODO_TOOL_FIXTURE_TODO_ID
+            and source_packet.get("recommended_action")
+            == SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT
+            and selected.get("text") == SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT
+        ):
+            raise ValueError(
+                "selected-todo source must match the real-action fixture contract"
+            )
+    if spec.scenario_id == "turn_terminal_settlement":
+        selected = dict(source_packet.get("selected_todo") or {})
+        if not (
+            contract.get("selected_todo_id") == "todo_terminal001"
+            and "settlement-proof.json" in str(selected.get("text") or "")
+        ):
+            raise ValueError(
+                "terminal-settlement source must select the final settlement fixture"
+            )
+    if spec.scenario_id not in {
+        "turn_peer_agent_identity",
+        "turn_same_agent_continuation",
+    }:
+        return
+    peer_route = model_behavior_semantic_contract_from_packet(
+        source_packet,
+        arm="full_packet",
+    )["peer_route"]
+    if not peer_route.get("agent_id"):
+        raise ValueError("peer-agent scenario requires a selected agent identity")
+    if peer_route.get("selected_todo_claimed_by") != peer_route.get("agent_id"):
+        raise ValueError("peer-agent scenario must route work to the selected peer")
+    if spec.scenario_id == "turn_same_agent_continuation" and not (
+        peer_route.get("continuation_policy") == "same_agent_non_delivery"
+        and peer_route.get("same_agent_continuation") is True
+    ):
+        raise ValueError("same-agent scenario must preserve the completing peer")
+
+
+def _validate_planning_context_scenario(
+    spec: _ScenarioSpec,
+    source_packet: Mapping[str, Any],
+    contract: dict[str, Any],
+) -> None:
+    if spec.scenario_id == "turn_future_primary_fallback":
+        _validate_future_primary_fallback_scenario(source_packet)
+    if spec.scenario_id == "turn_external_wait_fallback":
+        _validate_external_wait_fallback_scenario(source_packet)
+    if spec.scenario_id == "turn_planning_horizon_strategic_context":
+        _validate_planning_horizon_model_scenario(source_packet)
+    if spec.scenario_id != "turn_human_gate":
+        return
+    required = {
+        "selected_todo_id": None,
+        "user_action_required": True,
+        "must_attempt_work": False,
+        "delivery_allowed": False,
+        "quiet_noop_allowed": False,
+    }
+    if any(contract.get(field) != value for field, value in required.items()):
+        raise ValueError("human-gate scenario violates final gate precedence")
+
+
+def _validate_control_plane_composition_scenario(
+    spec: _ScenarioSpec,
+    source_packet: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> None:
+    if spec.scenario_id == "turn_required_vision_replan":
+        _validate_required_vision_replan_scenario(source_packet, contract)
+    if spec.scenario_id == "turn_scoped_gate_successor_replan":
+        signature = quota_action_signature_document(source_packet)
+        action = dict(signature.get("action") or {})
+        user = dict(signature.get("user") or {})
+        selected = dict(action.get("selected_todo") or {})
+        semantics = model_behavior_semantic_contract_from_packet(
+            source_packet,
+            arm="full_packet",
+        )
+        if not (
+            user.get("action_required") is True
+            and action.get("must_attempt") is True
+            and action.get("delivery_allowed") is True
+            and signature.get("response_plan") is None
+            and selected.get("todo_id") == "todo_portfolio_deferred"
+            and semantics["gate_or_stop"].get("interaction_mode")
+            == "scoped_user_gate_fallback"
+            and semantics["scheduler_action"].get("action") == "run_now"
+        ):
+            raise ValueError(
+                "scoped-gate scenario must notify without blocking successor replan"
+            )
+    if spec.scenario_id != "turn_capability_monitor_repair":
+        return
+    signature = quota_action_signature_document(source_packet)
+    capsule = dict(signature.get("contract_capsule") or {})
+    lane = dict(capsule.get("work_lane_contract") or {})
+    action = dict(signature.get("action") or {})
+    interaction = dict(capsule.get("interaction_contract") or {})
+    capability_gate = source_packet.get("capability_gate")
+    if not (
+        interaction.get("mode") == "capability_bridge_repair"
+        and action.get("must_attempt") is True
+        and action.get("quiet_noop_allowed") is False
+        and lane.get("must_attempt_work") is True
+        and isinstance(capability_gate, dict)
+        and capability_gate.get("action") == "repair_bridge"
+        and "private_read" in str(capability_gate.get("repair_missing") or [])
+        and "next_task_action.operation" in str(action.get("primary_action"))
+    ):
+        raise ValueError(
+            "capability gap must preserve must-attempt bridge repair semantics"
+        )
+
+
+def _validate_compaction_scenario(
+    spec: _ScenarioSpec,
+    source_packet: Mapping[str, Any],
+    actor_packet: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> None:
+    selected_todo_ids = {
+        "turn_quota_hot_path_compaction_regression": "todo_c0ffee123456",
+        "turn_quota_hot_path_selected_todo_invariance": "todo_portfolio001",
+        "turn_quota_hot_path_human_gate_invariance": None,
+    }
+    if spec.scenario_id in selected_todo_ids:
+        _validate_quota_hot_path_compaction_regression(
+            source_packet,
+            actor_packet,
+            contract,
+            expected_selected_todo_id=selected_todo_ids[spec.scenario_id],
         )
 
 
@@ -953,141 +1114,10 @@ def _scenario_contract(
         raise ValueError(
             f"scenario {spec.scenario_id} does not produce {spec.expected_route}"
         )
-    if (
-        spec.scenario_id == "onboarding_agent_identity_gate"
-        and contract.get("agent_id") is not None
-    ):
-        raise ValueError("identity-gate scenario must not preselect an agent")
-    if (
-        spec.scenario_id == "onboarding_goal_selection_gate"
-        and contract.get("goal_id") is not None
-    ):
-        raise ValueError("goal-selection scenario must not preselect a goal")
-    if spec.scenario_id == "turn_selected_todo" and not contract.get(
-        "selected_todo_id"
-    ):
-        raise ValueError("selected-todo scenario requires selected work")
-    if spec.scenario_id == "turn_selected_todo" and (
-        contract.get("selected_todo_id") != SELECTED_TODO_TOOL_FIXTURE_TODO_ID
-        or source_packet.get("recommended_action")
-        != SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT
-        or dict(source_packet.get("selected_todo") or {}).get("text")
-        != SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT
-    ):
-        raise ValueError(
-            "selected-todo source must match the real-action fixture contract"
-        )
-    if spec.scenario_id == "turn_terminal_settlement" and (
-        contract.get("selected_todo_id") != "todo_terminal001"
-        or "settlement-proof.json"
-        not in str(dict(source_packet.get("selected_todo") or {}).get("text") or "")
-    ):
-        raise ValueError(
-            "terminal-settlement source must select the final settlement fixture"
-        )
-    if spec.scenario_id in {
-        "turn_peer_agent_identity",
-        "turn_same_agent_continuation",
-    }:
-        peer_route = model_behavior_semantic_contract_from_packet(
-            source_packet,
-            arm="full_packet",
-        )["peer_route"]
-        if not peer_route.get("agent_id"):
-            raise ValueError("peer-agent scenario requires a selected agent identity")
-        if peer_route.get("selected_todo_claimed_by") != peer_route.get("agent_id"):
-            raise ValueError("peer-agent scenario must route work to the selected peer")
-        if spec.scenario_id == "turn_same_agent_continuation":
-            if peer_route.get("continuation_policy") != "same_agent_non_delivery":
-                raise ValueError("same-agent scenario requires same_agent_non_delivery")
-            if peer_route.get("same_agent_continuation") is not True:
-                raise ValueError(
-                    "same-agent scenario must preserve the completing peer"
-                )
-    if spec.scenario_id == "turn_future_primary_fallback":
-        _validate_future_primary_fallback_scenario(source_packet)
-    if spec.scenario_id == "turn_human_gate":
-        required = {
-            "selected_todo_id": None,
-            "user_action_required": True,
-            "must_attempt_work": False,
-            "delivery_allowed": False,
-            "quiet_noop_allowed": False,
-        }
-        if any(contract.get(field) != value for field, value in required.items()):
-            raise ValueError("human-gate scenario violates final gate precedence")
-    if spec.scenario_id == "turn_required_vision_replan":
-        _validate_required_vision_replan_scenario(source_packet, contract)
-    if spec.scenario_id == "turn_scoped_gate_successor_replan":
-        signature = quota_action_signature_document(source_packet)
-        action = dict(signature.get("action") or {})
-        user = dict(signature.get("user") or {})
-        selected = dict(action.get("selected_todo") or {})
-        if not (
-            user.get("action_required") is True
-            and action.get("must_attempt") is True
-            and action.get("delivery_allowed") is True
-            and signature.get("response_plan") is None
-            and selected.get("todo_id") == "todo_portfolio_deferred"
-        ):
-            raise ValueError(
-                "scoped-gate scenario must notify without blocking successor replan"
-            )
-        semantics = model_behavior_semantic_contract_from_packet(
-            source_packet,
-            arm="full_packet",
-        )
-        if semantics["gate_or_stop"].get("interaction_mode") != (
-            "scoped_user_gate_fallback"
-        ):
-            raise ValueError("scoped-gate scenario must preserve fallback mode")
-        if semantics["scheduler_action"].get("action") != "run_now":
-            raise ValueError("scoped-gate fallback must remain immediately runnable")
-    if spec.scenario_id == "turn_capability_monitor_repair":
-        signature = quota_action_signature_document(source_packet)
-        capsule = dict(signature.get("contract_capsule") or {})
-        lane = dict(capsule.get("work_lane_contract") or {})
-        action = dict(signature.get("action") or {})
-        interaction = dict(capsule.get("interaction_contract") or {})
-        if not (
-            interaction.get("mode") == "capability_bridge_repair"
-            and action.get("must_attempt") is True
-            and action.get("quiet_noop_allowed") is False
-            and lane.get("must_attempt_work") is True
-        ):
-            raise ValueError(
-                "capability gap must route the agent to a must-attempt "
-                "capability bridge repair, not a monitor fallback or quiet wait"
-            )
-        capability_gate = source_packet.get("capability_gate")
-        if not isinstance(capability_gate, dict) or capability_gate.get(
-            "action"
-        ) != "repair_bridge":
-            raise ValueError(
-                "capability gap must expose an agent-resolvable repair_bridge gate"
-            )
-        if "private_read" not in str(
-            capability_gate.get("repair_missing") or []
-        ):
-            raise ValueError(
-                "capability bridge repair must name the missing capability"
-            )
-        if "next_task_action.operation" not in str(action.get("primary_action")):
-            raise ValueError(
-                "primary action must direct the agent to verify the bridge inline"
-            )
-    compaction_selected_todos = {
-        "turn_quota_hot_path_compaction_regression": "todo_c0ffee123456",
-        "turn_quota_hot_path_selected_todo_invariance": "todo_portfolio001",
-        "turn_quota_hot_path_human_gate_invariance": None,
-    }
-    if spec.scenario_id in compaction_selected_todos:
-        _validate_quota_hot_path_compaction_regression(
-            source_packet,
-            actor_packet,
-            contract,
-            expected_selected_todo_id=compaction_selected_todos[spec.scenario_id],
-        )
+    _validate_identity_scenario_contract(spec, source_packet, contract)
+    _validate_planning_context_scenario(spec, source_packet, contract)
+    _validate_control_plane_composition_scenario(spec, source_packet, contract)
+    _validate_compaction_scenario(spec, source_packet, actor_packet, contract)
     return contract
 
 
@@ -1153,6 +1183,17 @@ def _receipt_alignment(
             if receipt.get(field) != expected[field]
         ]
         mismatches.extend(str(item) for item in receipt.get("safety_violations") or [])
+        if (
+            spec.semantic_contract_fields
+            and receipt.get("semantic_contract_complete") is not True
+        ):
+            mismatches.append("semantic_contract_incomplete")
+        mismatches.extend(
+            model_behavior_action_oracle_failures(
+                spec.action_oracle,
+                [str(item) for item in receipt.get("intended_action_kinds") or []],
+            )
+        )
     else:
         mismatches = []
         if receipt.get("next_action") != spec.expected_route:
@@ -1179,6 +1220,7 @@ def _scenario_result(
 ) -> tuple[dict[str, Any], bool, list[dict[str, Any]]]:
     receipt_digests: list[str] = []
     observed_routes: list[str] = []
+    observed_action_kind_sequences: list[list[str]] = []
     failure_codes: list[str] = []
     actor_error = False
     observations: list[dict[str, Any]] = []
@@ -1226,7 +1268,8 @@ def _scenario_result(
                     qualification_id=run_id,
                     arm="full_packet",
                     actor=turn_actor,
-                    semantic_contract_required=False,
+                    semantic_contract_required=bool(spec.semantic_contract_fields),
+                    semantic_contract_fields=spec.semantic_contract_fields,
                 )
                 observed_route = str(receipt.get("decision") or "")
             else:
@@ -1248,6 +1291,15 @@ def _scenario_result(
         )
         if observed_route not in observed_routes:
             observed_routes.append(observed_route)
+        if spec.actor_kind == "turn":
+            action_kind_sequence = [
+                str(item) for item in receipt.get("intended_action_kinds") or []
+            ]
+            if (
+                action_kind_sequence
+                and action_kind_sequence not in observed_action_kind_sequences
+            ):
+                observed_action_kind_sequences.append(action_kind_sequence)
         if not aligned:
             failure_codes.extend(mismatches)
     repeats_completed = len(receipt_digests)
@@ -1265,6 +1317,7 @@ def _scenario_result(
             "repeats_required": ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS,
             "repeats_completed": repeats_completed,
             "observed_routes": observed_routes,
+            "observed_action_kind_sequences": observed_action_kind_sequences,
             "failure_codes": sorted(set(failure_codes)),
             "receipt_digests": receipt_digests,
         },
@@ -1275,7 +1328,7 @@ def _scenario_result(
 
 def _contrast_result(
     spec: _ContrastSpec,
-    observations: Mapping[str, list[Mapping[str, Any]]],
+    observations: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> dict[str, Any]:
     left = observations.get(spec.left_scenario_id, [])
     right = observations.get(spec.right_scenario_id, [])
@@ -1300,8 +1353,7 @@ def _contrast_result(
             )
         )
     passed = bool(
-        not failure_codes
-        and compared == ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS
+        not failure_codes and compared == ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS
     )
     return {
         "schema_version": ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_SCHEMA_VERSION,
@@ -1401,16 +1453,11 @@ def run_actual_default_model_behavior_portfolio(
         results.append(result)
         observations[spec.scenario_id] = scenario_observations
 
-    contrast_results = [
-        _contrast_result(spec, observations)
-        for spec in _CONTRASTS
-    ]
+    contrast_results = [_contrast_result(spec, observations) for spec in _CONTRASTS]
     passed = all(result["status"] == "passed" for result in results) and all(
         result["status"] == "passed" for result in contrast_results
     )
-    scenario_failure_count = sum(
-        result["status"] == "failed" for result in results
-    )
+    scenario_failure_count = sum(result["status"] == "failed" for result in results)
     contrast_failure_count = sum(
         result["status"] == "failed" for result in contrast_results
     )

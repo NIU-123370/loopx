@@ -191,6 +191,7 @@ Gate、capability 与 workspace 是三条不同轴：
 todo_done:<todo-id>
 pr_merged:<pr-id>
 capacity_available:<capability>
+monitor_changed:<monitor-todo-id>
 ```
 
 条件满足不一定意味着原 Todo 直接运行。旧任务可能已经 stale，需要 successor replan。

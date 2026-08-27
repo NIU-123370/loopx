@@ -11,7 +11,7 @@ PROTOCOL = ROOT / "docs/reference/protocols/multi-agent-visible-launcher-v0.md"
 THREE_LAYER = ROOT / "docs/reference/protocols/multi-agent-three-layer-minimality-v0.md"
 LOCAL_PLAN = ROOT / "docs/reference/protocols/local-agent-launch-plan-v1.md"
 AUTO_RESEARCH_PROFILE = ROOT / "docs/reference/protocols/auto-research-role-profile-v0.md"
-AUTO_RESEARCH_GUIDE = ROOT / "loopx/capabilities/auto_research/README.md"
+AUTO_RESEARCH_GUIDE = ROOT / "demo/auto_research/README.md"
 PROTOCOL_INDEX = ROOT / "docs/reference/protocols/README.md"
 DOCS_INDEX = ROOT / "docs/README.md"
 
@@ -76,7 +76,7 @@ def main() -> int:
             "multi_agent_three_layer_minimality_contract_v0",
             "both the user-facing recipe and the domain preset stay thin",
             "Kernel Module",
-            "loopx/control_plane/agents/multi_agent/",
+            "demo/multi_agent/",
             "generic_multi_agent_role_profile_v0",
             "multi_agent_three_layer_minimality_contract_v0",
             "compact human status",

@@ -8,13 +8,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from loopx.extensions.lark.event_inbox import load_lark_event_inbox_config
 from loopx.extensions.lark.inbox_reactions import (
     complete_lark_event_inbox_reactions,
     lark_inbox_reaction_receipts,
     mark_lark_event_inbox_processing,
     record_lark_inbox_reaction,
 )
-from loopx.extensions.lark.event_inbox import load_lark_event_inbox_config
 from loopx.extensions.lark.inbox_reply import reply_lark_event_inbox
 
 
@@ -155,6 +155,29 @@ class ReplyRunner:
         if call[3:6] == ["im", "chats", "get"]:
             return {"returncode": 0, "stdout": "{}", "stderr": ""}
         if "+messages-reply" in call or "+messages-send" in call:
+            if "--dry-run" in call:
+                reply_text = call[call.index("--text") + 1]
+                return {
+                    "returncode": 0,
+                    "stdout": json.dumps(
+                        {
+                            "data": {
+                                "api": [
+                                    {
+                                        "body": {
+                                            "content": json.dumps(
+                                                {"text": reply_text},
+                                                ensure_ascii=False,
+                                            )
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "stderr": "",
+                }
             return {
                 "returncode": 0,
                 "stdout": json.dumps({"message_id": "om_reply_fixture"}),
@@ -184,9 +207,7 @@ class ReplyRunner:
         if "reactions" in call and "delete" in call:
             return {
                 "returncode": int(self.fail_reaction_delete),
-                "stdout": json.dumps(
-                    {"ok": not self.fail_reaction_delete}
-                ),
+                "stdout": json.dumps({"ok": not self.fail_reaction_delete}),
                 "stderr": "",
             }
         if "reactions" in call and "list" in call:
@@ -351,9 +372,10 @@ def test_completion_removes_only_recorded_bot_reactions(tmp_path: Path) -> None:
     assert result["status"] == "completed"
     assert result["deleted_count"] == 2
     assert all("delete" in call for call in runner.calls)
-    assert {
-        call[call.index("--reaction-id") + 1] for call in runner.calls
-    } == {"reaction_Get", "reaction_OnIt"}
+    assert {call[call.index("--reaction-id") + 1] for call in runner.calls} == {
+        "reaction_Get",
+        "reaction_OnIt",
+    }
     assert (
         lark_inbox_reaction_receipts(
             inbox=inbox,
@@ -407,9 +429,7 @@ def test_verified_reply_removes_processing_reaction(tmp_path: Path) -> None:
     assert result["reaction_cleanup_verified"] is True
     assert result["placement"] == "source_thread"
     delete_call = next(call for call in runner.calls if "delete" in call)
-    assert delete_call[delete_call.index("--reaction-id") + 1] == (
-        "reaction_OnIt"
-    )
+    assert delete_call[delete_call.index("--reaction-id") + 1] == ("reaction_OnIt")
     assert (
         lark_inbox_reaction_receipts(
             inbox=inbox,
@@ -443,8 +463,18 @@ def test_source_context_reply_uses_chat_root_for_top_level_message(
     )
 
     assert result["ok"] is True
+    assert result["format_preflight_passed"] is True
+    assert result["provider_preview_verified"] is True
     assert result["placement"] == "chat_root"
-    send_call = next(call for call in runner.calls if "+messages-send" in call)
+    preview_call = next(call for call in runner.calls if "--dry-run" in call)
+    assert preview_call[preview_call.index("--text") + 1] == (
+        "进展：\n- 第一项\n- 第二项"
+    )
+    send_call = next(
+        call
+        for call in runner.calls
+        if "+messages-send" in call and "--dry-run" not in call
+    )
     assert "--reply-in-thread" not in send_call
     assert send_call[send_call.index("--chat-id") + 1] == "oc_project_review"
     assert send_call[send_call.index("--text") + 1] == "进展：\n- 第一项\n- 第二项"
@@ -478,6 +508,75 @@ def test_source_context_reply_stays_in_existing_topic(tmp_path: Path) -> None:
     assert not any("+messages-send" in call for call in runner.calls)
 
 
+def test_reply_preview_verifies_provider_without_writing(tmp_path: Path) -> None:
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    runner = ReplyRunner(readback_text="line one\nline two")
+
+    result = reply_lark_event_inbox(
+        project=project,
+        config_path=config,
+        message_id="om_reaction_fixture",
+        text="line one\nline two",
+        execute=False,
+        provider_preflight=True,
+        runner=runner,
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "preview_ready"
+    assert result["external_write_performed"] is False
+    assert result["sender_identity_verified"] is True
+    assert result["sender_chat_membership_verified"] is True
+    assert result["provider_preview_performed"] is True
+    assert result["provider_preview_verified"] is True
+    provider_calls = [
+        call
+        for call in runner.calls
+        if "+messages-reply" in call or "+messages-send" in call
+    ]
+    assert len(provider_calls) == 1
+    assert "--dry-run" in provider_calls[0]
+
+
+def test_reply_rejects_literal_backslash_n_before_provider(tmp_path: Path) -> None:
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    runner = ReplyRunner()
+
+    try:
+        reply_lark_event_inbox(
+            project=project,
+            config_path=config,
+            message_id="om_reaction_fixture",
+            text=r"status:\n- first\n- second",
+            execute=False,
+            runner=runner,
+        )
+    except ValueError as exc:
+        assert "literal backslash-n" in str(exc)
+    else:
+        raise AssertionError("literal backslash-n must fail before provider calls")
+    assert runner.calls == []
+
+
+def test_multiline_readback_must_preserve_line_structure(tmp_path: Path) -> None:
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    runner = ReplyRunner(readback_text="line one line two")
+
+    result = reply_lark_event_inbox(
+        project=project,
+        config_path=config,
+        message_id="om_reaction_fixture",
+        text="line one\nline two",
+        execute=True,
+        runner=runner,
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "sent_unverified"
+    assert result["provider_preview_verified"] is True
+    assert result["reply_verified"] is False
+
+
 def test_verified_reply_accepts_provider_token_or_rendered_mention_name(
     tmp_path: Path,
 ) -> None:
@@ -502,8 +601,7 @@ def test_verified_reply_accepts_provider_token_or_rendered_mention_name(
             config_path=config,
             message_id="om_reaction_fixture",
             text=(
-                '<at open_id="ou_public_reviewer">Public Reviewer</at> '
-                "please review"
+                '<at open_id="ou_public_reviewer">Public Reviewer</at> please review'
             ),
             execute=True,
             runner=runner,
@@ -533,10 +631,7 @@ def test_rendered_mention_name_does_not_override_identity_mismatch(
         project=project,
         config_path=config,
         message_id="om_reaction_fixture",
-        text=(
-            '<at open_id="ou_public_reviewer">Public Reviewer</at> '
-            "please review"
-        ),
+        text=('<at open_id="ou_public_reviewer">Public Reviewer</at> please review'),
         execute=True,
         runner=runner,
     )

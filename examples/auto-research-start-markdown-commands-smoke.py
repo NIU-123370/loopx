@@ -14,10 +14,10 @@ QUESTION = "How should LoopX make visible multi-agent auto research useful?"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.human_view import (  # noqa: E402
+from demo.auto_research.human_view import (  # noqa: E402
     render_auto_research_markdown,
 )
-from loopx.capabilities.auto_research.user_contract import (  # noqa: E402
+from demo.auto_research.user_contract import (  # noqa: E402
     build_auto_research_user_contract,
 )
 

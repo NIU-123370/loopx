@@ -51,11 +51,6 @@ from .capabilities.semantic_preference.cli import (
     handle_semantic_preference_command,
     register_semantic_preference_commands,
 )
-from .capabilities.auto_research.cli import (
-    handle_auto_research_command,
-    register_auto_research_commands,
-    rewrite_auto_research_question_argv,
-)
 from .capabilities.value_connectors.cli import (
     handle_value_connector_command,
     register_value_connector_commands,
@@ -83,7 +78,6 @@ from .cli_commands import (
     handle_lark_inbox_command,
     handle_lark_kanban_command,
     handle_ml_experiment_command,
-    handle_multi_agent_command,
     handle_preset_command,
     handle_presentation_command,
     handle_dash_command,
@@ -125,7 +119,6 @@ from .cli_commands import (
     build_lark_issue_fix_reviewer_provider_hooks,
     register_lark_kanban_commands,
     register_ml_experiment_commands,
-    register_multi_agent_commands,
     register_preset_commands,
     register_presentation_commands,
     register_dash_commands,
@@ -212,6 +205,46 @@ def resolve_global_output_format(args: argparse.Namespace) -> str:
     return "markdown"
 
 
+def _demo_not_available_message(command: str) -> str:
+    return (
+        f"`{command}` is a LoopX **demo** showcase that ships only with a "
+        "source checkout (demo/), not in installed builds. Clone the loopx "
+        "repository to run it."
+    )
+
+
+def _register_demo_commands(
+    subparsers: argparse._SubParsersAction,
+    add_subcommand_format,
+) -> None:
+    """Register demo-only commands backed by the non-shipped demo/ package.
+
+    In a source checkout the full demo command surface is wired; in an
+    installed build the demo package is absent, so only a stub is registered and
+    dispatch reports the demo is not available.
+    """
+
+    for demo_command, module, register_name in (
+        ("auto-research", "demo.auto_research.cli", "register_auto_research_commands"),
+        ("multi-agent", "demo.multi_agent_cli", "register_multi_agent_commands"),
+    ):
+        try:
+            register = getattr(
+                __import__(module, fromlist=[register_name]),
+                register_name,
+            )
+            register(subparsers, add_subcommand_format)
+        except Exception:
+            stub = subparsers.add_parser(
+                demo_command,
+                help=(
+                    f"(demo) {demo_command} showcase — requires a loopx "
+                    "source checkout"
+                ),
+            )
+            add_subcommand_format(stub)
+
+
 def user_supplied_registry(argv: list[str] | None) -> bool:
     values = sys.argv[1:] if argv is None else argv
     return any(value == "--registry" or value.startswith("--registry=") for value in values)
@@ -289,9 +322,8 @@ def build_parser() -> LoopXArgumentParser:
 
     register_ml_experiment_commands(sub, add_subcommand_format)
 
-    register_auto_research_commands(sub, add_subcommand_format)
+    _register_demo_commands(sub, add_subcommand_format)
 
-    register_multi_agent_commands(sub, add_subcommand_format)
     register_turn_commands(sub, add_subcommand_format)
     register_host_mode_plan_command(sub, add_subcommand_format)
     register_preset_commands(sub, add_subcommand_format)
@@ -333,8 +365,12 @@ def main(argv: list[str] | None = None) -> int:
     if top_level_help_requested(raw_argv):
         print(render_concise_help(sys.argv[0] if argv is None else "loopx"), end="")
         return 0
-    raw_argv = rewrite_auto_research_question_argv(raw_argv)
+    try:
+        from demo.auto_research.cli import rewrite_auto_research_question_argv
 
+        raw_argv = rewrite_auto_research_question_argv(raw_argv)
+    except Exception:
+        pass  # demo package absent in installed builds; no question rewrite
     parser = build_parser()
     args = parser.parse_args(raw_argv)
     args.format = resolve_global_output_format(args)
@@ -528,25 +564,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ml-experiment":
         return handle_ml_experiment_command(args, output_format=output_format, print_payload=print_payload)
-
-    if args.command == "auto-research":
-        return handle_auto_research_command(
-            args,
-            registry_path=registry_path,
-            runtime_root_arg=args.runtime_root,
-            output_format=output_format,
-            print_payload=print_payload,
-        )
-
-    multi_agent_result = handle_multi_agent_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if multi_agent_result is not None:
-        return multi_agent_result
 
     turn_result = handle_turn_command(
         args,
@@ -908,6 +925,36 @@ def main(argv: list[str] | None = None) -> int:
             print_payload=print_payload,
             append_cli_rollout_event=append_cli_rollout_event,
         )
+
+    if args.command == "auto-research":
+        try:
+            from demo.auto_research.cli import handle_auto_research_command
+
+            return handle_auto_research_command(
+                args,
+                registry_path=registry_path,
+                runtime_root_arg=args.runtime_root,
+                output_format=output_format,
+                print_payload=print_payload,
+            )
+        except Exception:
+            print(_demo_not_available_message("auto-research"))
+            return 1
+
+    if args.command == "multi-agent":
+        try:
+            from demo.multi_agent_cli import handle_multi_agent_command
+
+            return handle_multi_agent_command(
+                args,
+                registry_path=registry_path,
+                runtime_root_arg=args.runtime_root,
+                output_format=output_format,
+                print_payload=print_payload,
+            )
+        except Exception:
+            print(_demo_not_available_message("multi-agent"))
+            return 1
 
     return 2
 

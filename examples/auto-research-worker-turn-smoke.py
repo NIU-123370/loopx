@@ -16,20 +16,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.demo_e2e import _seed_visible_demo_control_plane  # noqa: E402
-from loopx.capabilities.auto_research.demo_supervisor import (  # noqa: E402
+from demo.auto_research.demo_e2e import _seed_visible_demo_control_plane  # noqa: E402
+from demo.auto_research.demo_supervisor import (  # noqa: E402
     build_auto_research_demo_supervisor_plan,
 )
-from loopx.capabilities.auto_research.evidence_packet import (  # noqa: E402
+from demo.auto_research.evidence_packet import (  # noqa: E402
     build_auto_research_evidence_packet,
 )
-from loopx.capabilities.auto_research.preset import (  # noqa: E402
+from demo.auto_research.preset import (  # noqa: E402
     auto_research_successor_specs_for_action,
 )
-from loopx.capabilities.auto_research.rollout_append import (  # noqa: E402
+from demo.auto_research.rollout_append import (  # noqa: E402
     append_auto_research_rollout_events,
 )
-from loopx.control_plane.agents.multi_agent.role_successor import (  # noqa: E402
+from demo.multi_agent.role_successor import (  # noqa: E402
     apply_role_successor_todos,
 )
 from loopx.todos import add_goal_todo, complete_goal_todo  # noqa: E402

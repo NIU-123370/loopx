@@ -40,7 +40,11 @@ from .projection import (
 )
 from .route_continuation import build_todo_route_continuation_lanes
 from .succession_warning import build_todo_succession_warning_lanes
-from .summary_item import compact_todo_summary_item, todo_summary_source_items
+from .summary_item import (
+    compact_todo_summary_item,
+    todo_planning_source_items,
+    todo_summary_source_items,
+)
 from .user_gate import is_user_gate_todo_item
 
 MONITOR_DUE_ITEM_LIMIT = 1
@@ -84,6 +88,7 @@ QUOTA_PAYLOAD_ITEM_FIELDS = (
     "global_gate",
     "unblocks_todo_id",
     "resume_when",
+    "resume_monitor_generation",
     "resume_condition",
     "resume_ready",
     "blocking_monitor_todo_id",
@@ -101,6 +106,7 @@ QUOTA_PAYLOAD_ITEM_FIELDS = (
     "result_hash",
     "consecutive_no_change",
     "material_change",
+    "material_change_generation",
     "max_no_change_before_replan",
     "route_continuation_replan_required",
     "route_continuation_reason",
@@ -1089,6 +1095,31 @@ def select_quota_todo_source_items(
         if isinstance(project_asset_value, dict)
         else None
     )
+    if is_canonical_attention_todo_summary(canonical_value):
+        return canonical_items if canonical_items is not None else project_asset_items or []
+    return project_asset_items if project_asset_items is not None else canonical_items or []
+
+
+def _planning_inventory_source_items(value: Any) -> list[dict[str, Any]] | None:
+    """Return canonical Todo rows before presentation-lane expansion.
+
+    Planning consumers share domain-state rows instead of rebuilding a larger,
+    order-sensitive union from presentation lanes.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    return todo_planning_source_items(value)
+
+
+def select_planning_inventory_source_items(
+    canonical_value: Any,
+    project_asset_value: Any,
+) -> list[dict[str, Any]]:
+    """Select the canonical non-terminal rows shared by planning read models."""
+
+    canonical_items = _planning_inventory_source_items(canonical_value)
+    project_asset_items = _planning_inventory_source_items(project_asset_value)
     if is_canonical_attention_todo_summary(canonical_value):
         return canonical_items if canonical_items is not None else project_asset_items or []
     return project_asset_items if project_asset_items is not None else canonical_items or []

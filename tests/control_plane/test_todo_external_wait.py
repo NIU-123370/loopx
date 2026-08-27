@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Event
+
+import pytest
+
+from loopx.control_plane.scheduler.monitor_poll_writeback import (
+    write_monitor_poll_todo_state,
+)
+from loopx.control_plane.testing.canary_harness import write_fixture_registry
+from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from loopx.todos import complete_goal_todo, update_goal_todo
+
+
+GOAL_ID = "external-wait-fixture"
+AGENT_ID = "codex-main"
+WAITING_ID = "todo_waiting001"
+MONITOR_ID = "todo_monitor001"
+DEPENDENCY_ID = "todo_dependency001"
+FALLBACK_ID = "todo_fallback001"
+
+
+def _write_fixture(root: Path, *, dependency: bool = False) -> tuple[Path, Path]:
+    project = root / "project"
+    runtime = root / "runtime"
+    state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    registry = project / ".loopx" / "registry.json"
+    state_file.parent.mkdir(parents=True)
+    dependency_todo = (
+        "- [ ] [P0] Finish the exact prerequisite.\n"
+        "  <!-- loopx:todo "
+        f"todo_id={DEPENDENCY_ID} status=open task_class=advancement_task "
+        f"claimed_by={AGENT_ID} successor_todo_ids={WAITING_ID} -->\n"
+        if dependency
+        else ""
+    )
+    state_file.write_text(
+        "---\nstatus: active\nupdated_at: 2026-08-25T00:00:00Z\n---\n\n"
+        "# Active Goal State\n\n## Agent Todo\n\n"
+        f"{dependency_todo}"
+        "- [ ] [P0] Resume the validated slice after its typed dependency.\n"
+        "  <!-- loopx:todo "
+        f"todo_id={WAITING_ID} status=open task_class=advancement_task "
+        f"claimed_by={AGENT_ID} -->\n"
+        "- [ ] [P0] Poll the external lifecycle.\n"
+        "  <!-- loopx:todo "
+        f"todo_id={MONITOR_ID} status=open task_class=continuous_monitor "
+        f"claimed_by={AGENT_ID} target_key=external-review watch_only=true "
+        "result_hash=review-v2 material_change=false "
+        "material_change_generation=2 -->\n"
+        "- [ ] [P1] Advance the independent fallback.\n"
+        "  <!-- loopx:todo "
+        f"todo_id={FALLBACK_ID} status=open task_class=advancement_task "
+        f"claimed_by={AGENT_ID} -->\n",
+        encoding="utf-8",
+    )
+    write_fixture_registry(
+        project=project,
+        runtime_root=runtime,
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        domain="external-wait",
+        adapter_kind="generic_project_goal_v0",
+        registered_agents=[AGENT_ID],
+        quota_allowed_slots=None,
+    )
+    return registry, state_file
+
+
+def _todos(state_file: Path) -> dict[str, dict]:
+    summary = parse_active_state_todos(state_file.read_text(encoding="utf-8"))[
+        "agent_todos"
+    ]
+    return {item["todo_id"]: item for item in summary["items"]}
+
+
+def test_monitor_change_wait_binds_generation_and_resumes_only_after_increment(
+    tmp_path: Path,
+) -> None:
+    registry, state_file = _write_fixture(tmp_path)
+
+    transition = update_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=WAITING_ID,
+        resume_when=f"monitor_changed:{MONITOR_ID}",
+        successor_todo_ids=[FALLBACK_ID],
+        agent_id=AGENT_ID,
+    )
+
+    receipt = transition["external_wait_transition"]
+    assert receipt["baseline_generation"] == 2
+    assert receipt["successor_todo_ids"] == [FALLBACK_ID]
+    waiting = _todos(state_file)[WAITING_ID]
+    assert waiting["resume_monitor_generation"] == 2
+    assert waiting["resume_ready"] is False
+
+    unchanged = write_monitor_poll_todo_state(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        execute=True,
+        reason_summary="external review remains unchanged",
+        generated_at="2026-08-25T01:00:00Z",
+        todo_id=MONITOR_ID,
+        result_hash="review-v3-unclassified",
+        material_change=False,
+        next_due_at="2026-08-25T02:00:00Z",
+        agent_id=AGENT_ID,
+    )
+    assert unchanged["material_change_generation"] == 2
+    assert _todos(state_file)[WAITING_ID]["resume_ready"] is False
+
+    changed = write_monitor_poll_todo_state(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        execute=True,
+        reason_summary="external review produced a typed material change",
+        generated_at="2026-08-25T02:00:00Z",
+        todo_id=MONITOR_ID,
+        result_hash="review-v3-approved",
+        material_change=True,
+        agent_id=AGENT_ID,
+    )
+    assert changed["material_change_generation"] == 3
+    resumed = _todos(state_file)[WAITING_ID]
+    assert resumed["resume_ready"] is True
+    assert resumed["resume_condition"]["generation_fence"] == (
+        "strictly_greater_than_baseline"
+    )
+
+    replay = write_monitor_poll_todo_state(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        execute=True,
+        reason_summary="replay the same material observation",
+        generated_at="2026-08-25T02:01:00Z",
+        todo_id=MONITOR_ID,
+        result_hash="review-v3-approved",
+        material_change=True,
+        agent_id=AGENT_ID,
+    )
+    assert replay["material_change_generation"] == 3
+
+    with pytest.raises(ValueError, match="clear the satisfied resume_when"):
+        update_goal_todo(
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            todo_id=WAITING_ID,
+            resume_when=f"monitor_changed:{MONITOR_ID}",
+            successor_todo_ids=[FALLBACK_ID],
+            agent_id=AGENT_ID,
+        )
+
+
+def test_overlapping_material_polls_recompute_generation_after_wait_baseline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loopx.todos as todos_module
+
+    registry, state_file = _write_fixture(tmp_path)
+    original_update = todos_module.update_goal_todo
+    second_poll_ready = Event()
+    release_second_poll = Event()
+
+    def delay_second_poll(**kwargs):
+        observation = kwargs.get("monitor_metadata")
+        result_hash = getattr(observation, "result_hash", None)
+        if result_hash == "review-v4-second":
+            second_poll_ready.set()
+            if not release_second_poll.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release overlapping poll")
+        return original_update(**kwargs)
+
+    monkeypatch.setattr(todos_module, "update_goal_todo", delay_second_poll)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        second_poll = executor.submit(
+            write_monitor_poll_todo_state,
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            execute=True,
+            generated_at="2026-08-25T02:01:00Z",
+            todo_id=MONITOR_ID,
+            result_hash="review-v4-second",
+            material_change=True,
+            agent_id=AGENT_ID,
+        )
+        assert second_poll_ready.wait(timeout=5)
+
+        first_poll = write_monitor_poll_todo_state(
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            execute=True,
+            generated_at="2026-08-25T02:00:00Z",
+            todo_id=MONITOR_ID,
+            result_hash="review-v3-first",
+            material_change=True,
+            agent_id=AGENT_ID,
+        )
+        assert first_poll["material_change_generation"] == 3
+
+        wait_transition = update_goal_todo(
+            registry_path=registry,
+            goal_id=GOAL_ID,
+            todo_id=WAITING_ID,
+            resume_when=f"monitor_changed:{MONITOR_ID}",
+            successor_todo_ids=[FALLBACK_ID],
+            agent_id=AGENT_ID,
+        )
+        assert wait_transition["external_wait_transition"]["baseline_generation"] == 3
+
+        release_second_poll.set()
+        second_result = second_poll.result(timeout=5)
+
+    assert second_result["material_change_generation"] == 4
+    todos = _todos(state_file)
+    assert todos[MONITOR_ID]["result_hash"] == "review-v4-second"
+    assert todos[MONITOR_ID]["material_change_generation"] == 4
+    assert todos[WAITING_ID]["resume_ready"] is True
+
+
+def test_dependency_completion_automatically_resumes_waiting_todo(tmp_path: Path) -> None:
+    registry, state_file = _write_fixture(tmp_path, dependency=True)
+
+    transition = update_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=WAITING_ID,
+        resume_when=f"todo_done:{DEPENDENCY_ID}",
+        successor_todo_ids=[FALLBACK_ID],
+        agent_id=AGENT_ID,
+    )
+    assert transition["external_wait_transition"]["resume_kind"] == "todo_done"
+    assert _todos(state_file)[WAITING_ID]["resume_ready"] is False
+
+    complete_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=DEPENDENCY_ID,
+        successor_todo_ids=[WAITING_ID],
+        agent_id=AGENT_ID,
+    )
+
+    waiting = _todos(state_file)[WAITING_ID]
+    assert waiting["resume_ready"] is True
+    assert waiting["resume_condition"]["target_status"] == "done"
+
+
+def test_waiting_prose_without_typed_condition_remains_runnable(tmp_path: Path) -> None:
+    registry, state_file = _write_fixture(tmp_path)
+
+    update_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        todo_id=WAITING_ID,
+        note="External reviewer approval is pending; continue only after review.",
+        agent_id=AGENT_ID,
+    )
+
+    waiting = _todos(state_file)[WAITING_ID]
+    assert "resume_when" not in waiting
+    executable = parse_active_state_todos(
+        state_file.read_text(encoding="utf-8")
+    )["agent_todos"]["first_executable_items"]
+    assert WAITING_ID in {item["todo_id"] for item in executable}

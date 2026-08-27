@@ -157,9 +157,20 @@ choice is now implemented rather than hypothetical.
 | Effect runtime and Turn journal ([#3416](https://github.com/huangruiteng/loopx/pull/3416)) | Effect algebra, settlement rules, runtime lifecycle, typed Turn-journal interpretation, and durable checkpoint effects | Python settlement facades still expose fine-grained calls and duplicate DTO/enum shapes |
 | Todo, quota, and scheduler proof slices ([#3431](https://github.com/huangruiteng/loopx/pull/3431)–[#3434](https://github.com/huangruiteng/loopx/pull/3434)) | Completion fence/state, workspace causality, and scheduler transitions each have one TS rule owner | The cuts are mostly leaf-shaped; Python still composes several product transactions |
 | Scheduler durable state ([#3440](https://github.com/huangruiteng/loopx/pull/3440)) | State normalization, persistence, replay, and one coarse transition are TS-owned | The Python compatibility path still pays a cross-runtime transport tax |
-| Scheduler heartbeat/state transaction | TypeScript owns ACK and host-failure validation, state construction, failure-cache transitions, replay/CAS fencing, and atomic writes | Python remains a compact-facts transport and legacy event projection while the external host adapter and CLI still live in Python |
+| Scheduler heartbeat/state transaction | TypeScript owns ACK and host-failure validation, state construction, failure-cache transitions, replay/CAS fencing, and atomic writes | Python retains only a direct native-command transport and legacy event projection; external host mutation remains Python |
+| Quota spend commit transaction | TypeScript owns final spend-transition validation, typed event construction, effect replay/CAS fencing, crash repair, and the JSON/Markdown/index write set | Python still projects `should-run` and settlement readback facts, and holds the legacy cross-writer index lock until the CLI/index writers move in-process |
 | Runtime decoders ([#3443](https://github.com/huangruiteng/loopx/pull/3443)) | Stable primitive decoding has one small shared module; domain decoders remain local | No larger schema framework is justified |
 | Transaction payoff ([#3464](https://github.com/huangruiteng/loopx/pull/3464), [#3481](https://github.com/huangruiteng/loopx/pull/3481), and Todo completion) | Turn settlement, quota delivery routing, and Todo completion each cross one coarse TS boundary; the Todo transaction owns identity, replay fencing, validation planning/result reduction, continuation/recovery, and completion metadata | Python still executes explicitly external providers and materializes legacy Markdown/event results; other domains still need their own bounded cutovers |
+
+The scheduler facade exit is now a concrete migration stage. A native
+`heartbeat_commit_cli.ts` accepts compact scheduler/host facts and owns the
+scoped state read, CAS digest, semantic effect identity, validation, replay,
+and locked write in one process. The managed `scheduler.heartbeat.commit`
+handler and the Python semantic bridge are removed. Python quota code remains
+only as a direct subprocess transport plus the compatibility event projection;
+the host automation adapter and its TOML/SQLite writes are intentionally still
+Python. The final deletion trigger for that retained code is moving the host
+adapter and scheduler CLI/projection to the same native transaction boundary.
 
 These slices proved correctness, packaging, Windows lifecycle, crash recovery,
 real TS-owned writes, and acceptable warm primitive-call latency. They also
@@ -225,10 +236,12 @@ domains would now increase total complexity.
 ### Stage 2B — Complete transaction cutovers (active)
 
 Select by deletion leverage and runtime traffic, not by ease of translation.
-The shipped Turn settlement, quota delivery-routing, and Todo-completion
-cutovers establish the pattern. Subsequent candidates are quota
-spend/settlement and scheduler heartbeat/state transactions, chosen only when
-each PR can retire an existing facade or materially shrink it.
+The shipped Turn settlement, quota delivery-routing, Todo-completion,
+scheduler-heartbeat, quota-spend commit, and task-lease acquire cutovers
+establish the pattern.
+Subsequent candidates must name a remaining transaction and its deletion
+leverage; remaining quota settlement readback is eligible only when it can
+retire or materially shrink the facade rather than add another leaf handler.
 
 For each completed transaction, replace migration-only characterization workers
 and Python implementation fixtures with native TS semantic/invariant tests plus
@@ -262,16 +275,41 @@ shipped Stage 2B cutovers are in place:
   the legacy event shape. The remaining facade exits when the scheduler CLI and
   host adapter call this transaction natively; until then its state preflight is
   limited to the external-provider boundary.
+- Quota spend commit: TypeScript revalidates the compact before/after transition,
+  constructs the canonical public-safe spend event, fences the effect with a
+  locked index CAS, and commits JSON, Markdown, index, and transaction receipt
+  as one repairable operation. Same-effect retries are idempotent, cross-effect
+  drift conflicts, and a prepared transaction repairs a partial artifact set.
+  The receipt binds the pre-append index digest and byte offset, so a retry can
+  repair only its own truncated final JSONL row while unrelated corruption
+  still fails closed.
+  Python retains `should-run`/settlement fact projection plus one coarse
+  transport call and the legacy kernel index lock; it no longer constructs or
+  writes the spend event.
+- Task-lease acquire: TypeScript owns identity normalization, settlement-plan
+  projection, provider failure classification, ordered receipt construction,
+  and the canonical result. Python invokes the existing atomic provider between
+  one preflight and one final reduction; the provider retains the per-goal lock,
+  owner eligibility, conflict, compare-and-swap, idempotency, and lease-file
+  durability checks. Invalid identities stop before the provider, while a
+  crash/retry after the provider re-enters its same-key idempotent path.
 
-The Todo cutover removes the Python state-evaluation dataclass, local identity
+The quota-spend cutover removes the Python spend-event builder and three-file
+writer. Its bounded facade exits when the quota CLI and remaining run-index
+writers execute the transaction in-process; until then it supplies compact
+projection facts and shares the legacy Python index lock with unmigrated
+writers. The Todo cutover removes the Python state-evaluation dataclass, local identity
 projection, replay helper, and public runtime handlers for those implementation
 leaves. The remaining Python Todo facade owns transport, external command
 execution, source compare-and-swap, legacy response projection, and the actual
 Markdown/event write. It exits when those writers and the CLI move into the
 native TS transaction. The remaining fine-grained Turn facade exits after
-quota, host-adapter, and task-lease callers move to their own coarse
-transactions. Vision checkpointing remains a separate refresh/writeback
-transaction because it does not share the delivery-selection lifecycle phase.
+quota and host-adapter callers move to their own coarse transactions. The
+task-lease Python facade now contains only transport, the atomic provider, and
+legacy CLI projection; it exits when lease persistence and the task-lease CLI
+run in the native TS transaction. Vision checkpointing remains a separate
+refresh/writeback transaction because it does not share the delivery-selection
+lifecycle phase.
 
 ### Stage 3 — CLI and App convergence
 

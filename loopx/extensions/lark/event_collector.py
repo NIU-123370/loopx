@@ -8,17 +8,23 @@ import re
 import shlex
 import shutil
 import subprocess
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .event_inbox import (
+    ROUTE_KEY_PATTERN,
     SAFE_PROFILE_PATTERN,
     inspect_lark_event_inbox,
     load_lark_event_inbox_config,
 )
 
-
-CONFIG_SCHEMA_VERSION = "lark_event_collector_config_v0"
+CONFIG_SCHEMA_VERSION_V0 = "lark_event_collector_config_v0"
+CONFIG_SCHEMA_VERSION = "lark_event_collector_config_v1"
+SUPPORTED_CONFIG_SCHEMA_VERSIONS = {
+    CONFIG_SCHEMA_VERSION_V0,
+    CONFIG_SCHEMA_VERSION,
+}
 PLAN_SCHEMA_VERSION = "lark_event_collector_plan_v0"
 STATUS_SCHEMA_VERSION = "lark_event_collector_status_v0"
 INSTALL_SCHEMA_VERSION = "lark_event_collector_install_v0"
@@ -27,6 +33,9 @@ CHAT_RE = re.compile(r"^oc_[A-Za-z0-9_-]+$")
 TIMEOUT_RE = re.compile(r"^[1-9][0-9]*(?:s|m|h)$")
 SUPPORTED_SUPERVISORS = {"launchd", "systemd"}
 SUPPORTED_EVENT_KEY = "im.message.receive_v1"
+MAX_ROUTE_COUNT = 50
+TURN_START_SYNC_MAX_LOOKBACK_SECONDS = 7 * 24 * 60 * 60
+TURN_START_SYNC_MAX_OVERLAP_SECONDS = 5 * 60
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -80,51 +89,164 @@ def load_lark_event_collector_config(
         ) from exc
     if (
         not isinstance(payload, Mapping)
-        or payload.get("schema_version") != CONFIG_SCHEMA_VERSION
+        or payload.get("schema_version") not in SUPPORTED_CONFIG_SCHEMA_VERSIONS
     ):
         raise ValueError(
-            f"lark collector config schema_version must be {CONFIG_SCHEMA_VERSION}"
+            "lark collector config schema_version must be "
+            f"{CONFIG_SCHEMA_VERSION_V0} or {CONFIG_SCHEMA_VERSION}"
         )
+    schema_version = str(payload["schema_version"])
     enabled = payload.get("enabled") is True
     service_name = str(payload.get("service_name") or "loopx-lark-collector").strip()
     event_key = str(payload.get("event_key") or "im.message.receive_v1").strip()
     identity = str(payload.get("identity") or "bot").strip()
     supervisor = str(payload.get("supervisor") or "").strip()
-    chat_id = str(payload.get("chat_id") or "").strip()
     timeout = str(payload.get("consume_timeout") or "30m").strip()
     lark_cli_bin = str(payload.get("lark_cli_bin") or "lark-cli").strip()
+    raw_turn_start_sync = payload.get("turn_start_sync")
+    if raw_turn_start_sync is not None and not isinstance(raw_turn_start_sync, Mapping):
+        raise TypeError("collector turn_start_sync must be an object")
+    raw_turn_start_sync = (
+        raw_turn_start_sync if isinstance(raw_turn_start_sync, Mapping) else {}
+    )
+    turn_start_sync_enabled = raw_turn_start_sync.get("enabled") is True
+    turn_start_sync_lookback = raw_turn_start_sync.get(
+        "initial_lookback_seconds", 15 * 60
+    )
+    turn_start_sync_overlap = raw_turn_start_sync.get("overlap_seconds", 5)
+    turn_start_sync_page_size = raw_turn_start_sync.get("page_size", 50)
+    for label, value, lower, upper in (
+        (
+            "initial_lookback_seconds",
+            turn_start_sync_lookback,
+            60,
+            TURN_START_SYNC_MAX_LOOKBACK_SECONDS,
+        ),
+        (
+            "overlap_seconds",
+            turn_start_sync_overlap,
+            0,
+            TURN_START_SYNC_MAX_OVERLAP_SECONDS,
+        ),
+        ("page_size", turn_start_sync_page_size, 1, 50),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not lower <= value <= upper
+        ):
+            raise ValueError(f"collector turn_start_sync {label} is invalid")
     if not SERVICE_RE.fullmatch(service_name):
         raise ValueError("service_name must be a lowercase loopx- service token")
     if event_key != SUPPORTED_EVENT_KEY:
-        raise ValueError(
-            f"collector v0 event_key must be {SUPPORTED_EVENT_KEY}"
-        )
+        raise ValueError(f"collector event_key must be {SUPPORTED_EVENT_KEY}")
     if identity != "bot":
-        raise ValueError("collector v0 identity must be bot")
+        raise ValueError("collector identity must be bot")
     if supervisor not in SUPPORTED_SUPERVISORS:
         raise ValueError("supervisor must be launchd or systemd")
-    if not CHAT_RE.fullmatch(chat_id):
-        raise ValueError("chat_id must be a Lark oc_ chat id")
     if not TIMEOUT_RE.fullmatch(timeout):
         raise ValueError("consume_timeout must use a bounded duration such as 30m")
     if Path(lark_cli_bin).name != lark_cli_bin or not lark_cli_bin:
         raise ValueError("lark_cli_bin must be a command name, not a path")
-    inbox_config_ref, inbox_config_path = _relative_project_path(
-        root, payload.get("event_inbox_config"), "event_inbox_config"
-    )
-    inbox = load_lark_event_inbox_config(project=root, config_path=inbox_config_path)
-    if enabled and not inbox["enabled"]:
-        raise ValueError("enabled collector requires an enabled event inbox")
-    if enabled and not inbox["thread_complete"]:
+    if schema_version == CONFIG_SCHEMA_VERSION_V0:
+        raw_routes: object = [
+            {
+                "route_key": "default",
+                "chat_id": payload.get("chat_id"),
+                "event_inbox_config": payload.get("event_inbox_config"),
+            }
+        ]
+    else:
+        if "chat_id" in payload or "event_inbox_config" in payload:
+            raise ValueError(
+                "collector v1 uses routes instead of top-level chat_id or "
+                "event_inbox_config"
+            )
+        raw_routes = payload.get("routes")
+    if not isinstance(raw_routes, list) or not (
+        1 <= len(raw_routes) <= MAX_ROUTE_COUNT
+    ):
         raise ValueError(
-            "collector lifecycle currently requires configured_chat_all capture"
-    )
+            f"collector routes must contain 1-{MAX_ROUTE_COUNT} route objects"
+        )
+    routes: list[dict[str, Any]] = []
+    seen_route_keys: set[str] = set()
+    seen_chat_ids: set[str] = set()
+    seen_inbox_refs: set[str] = set()
+    seen_inbox_paths: set[Path] = set()
+    for index, raw_route in enumerate(raw_routes):
+        if not isinstance(raw_route, Mapping):
+            raise TypeError(f"collector route {index + 1} must be an object")
+        route_key = str(raw_route.get("route_key") or "").strip()
+        if not ROUTE_KEY_PATTERN.fullmatch(route_key):
+            raise ValueError(
+                f"collector route {index + 1} route_key must be a lowercase "
+                "public-safe token"
+            )
+        chat_id = str(raw_route.get("chat_id") or "").strip()
+        if not CHAT_RE.fullmatch(chat_id):
+            raise ValueError(
+                f"collector route {index + 1} chat_id must be a Lark oc_ chat id"
+            )
+        inbox_config_ref, inbox_config_path = _relative_project_path(
+            root,
+            raw_route.get("event_inbox_config"),
+            f"collector route {index + 1} event_inbox_config",
+        )
+        if route_key in seen_route_keys:
+            raise ValueError("collector routes must use unique route keys")
+        if chat_id in seen_chat_ids:
+            raise ValueError("collector routes must use unique chat ids")
+        if inbox_config_ref in seen_inbox_refs:
+            raise ValueError(
+                "collector routes must use independent event inbox configs and paths"
+            )
+        inbox = load_lark_event_inbox_config(
+            project=root,
+            config_path=inbox_config_path,
+        )
+        if enabled and not inbox["enabled"]:
+            raise ValueError("enabled collector requires enabled event inboxes")
+        if enabled and not inbox["thread_complete"]:
+            raise ValueError(
+                "collector lifecycle currently requires configured_chat_all capture"
+            )
+        reply_chat_id = str(inbox["reply"].get("chat_id") or "").strip()
+        if inbox["reply"].get("enabled") is True and reply_chat_id != chat_id:
+            raise ValueError(
+                "collector route chat_id must match the inbox reply chat_id"
+            )
+        inbox_path = inbox["inbox_path"]
+        if inbox_path is not None and inbox_path in seen_inbox_paths:
+            raise ValueError(
+                "collector routes must use independent event inbox configs and paths"
+            )
+        seen_route_keys.add(route_key)
+        seen_chat_ids.add(chat_id)
+        seen_inbox_refs.add(inbox_config_ref)
+        if inbox_path is not None:
+            seen_inbox_paths.add(inbox_path)
+        routes.append(
+            {
+                "route_key": route_key,
+                "chat_id": chat_id,
+                "event_inbox_config_ref": inbox_config_ref,
+                "inbox": inbox,
+            }
+        )
     configured_profile = str(payload.get("profile") or "").strip()
-    reply_profile = (
-        str(inbox["reply"].get("sender_profile") or "").strip()
-        if inbox["reply"].get("enabled") is True
-        else ""
-    )
+    reply_profiles = {
+        str(route["inbox"]["reply"].get("sender_profile") or "").strip()
+        for route in routes
+        if route["inbox"]["reply"].get("enabled") is True
+    }
+    reply_profiles.discard("")
+    if not configured_profile and len(reply_profiles) > 1:
+        raise ValueError(
+            "all collector route reply profiles must match one profile-bound "
+            "event stream"
+        )
+    reply_profile = next(iter(reply_profiles), "")
     profile = configured_profile or reply_profile
     profile_source = None
     if configured_profile:
@@ -132,18 +254,27 @@ def load_lark_event_collector_config(
     elif reply_profile:
         profile_source = "event_inbox_reply"
     if enabled and (
-        not SAFE_PROFILE_PATTERN.fullmatch(profile)
-        or profile.lower() == "default"
+        not SAFE_PROFILE_PATTERN.fullmatch(profile) or profile.lower() == "default"
     ):
         raise ValueError(
             "enabled lark collector requires an explicit non-default profile "
             "or an enabled inbox reply sender_profile"
         )
-    if configured_profile and reply_profile and configured_profile != reply_profile:
+    if configured_profile and any(
+        configured_profile != candidate for candidate in reply_profiles
+    ):
         raise ValueError(
-            "lark collector profile must match the inbox reply sender_profile"
+            "lark collector profile must match every inbox reply sender_profile"
+        )
+    if turn_start_sync_enabled and any(
+        route["inbox"]["material_review"].get("enabled") is not True for route in routes
+    ):
+        raise ValueError(
+            "collector turn_start_sync requires material_review on every route so "
+            "new messages enter an Agent triage lane"
         )
     return {
+        "schema_version": schema_version,
         "enabled": enabled,
         "project": root,
         "config_path": path,
@@ -153,22 +284,32 @@ def load_lark_event_collector_config(
         "profile": profile,
         "profile_source": profile_source,
         "supervisor": supervisor,
-        "chat_id": chat_id,
         "consume_timeout": timeout,
         "lark_cli_bin": lark_cli_bin,
-        "event_inbox_config_ref": inbox_config_ref,
-        "inbox": inbox,
+        "turn_start_sync": {
+            "enabled": turn_start_sync_enabled,
+            "initial_lookback_seconds": turn_start_sync_lookback,
+            "overlap_seconds": turn_start_sync_overlap,
+            "page_size": turn_start_sync_page_size,
+        },
+        "routes": routes,
     }
 
 
-def _jq_projection(chat_id: str) -> str:
-    chat_literal = json.dumps(chat_id, ensure_ascii=False)
+def _jq_projection(chat_ids: str | Sequence[str]) -> str:
+    values = [chat_ids] if isinstance(chat_ids, str) else list(chat_ids)
+    if not values:
+        raise ValueError("collector jq projection requires at least one chat id")
+    chat_filter = " or ".join(
+        f".chat_id == {json.dumps(chat_id, ensure_ascii=False)}" for chat_id in values
+    )
     return (
-        f"select(.chat_id == {chat_literal}) | "
+        f"select({chat_filter}) | "
         '{schema_version:"lark_event_inbox_event_v0",'
         "event_id:(.event_id // .message_id // .id),"
         "message_id:(.message_id // .id),"
-        "create_time:.create_time,content:.content,sender_id:.sender_id,"
+        "create_time:.create_time,content:.content,"
+        "attachment_count:(.attachment_count // 0),sender_id:.sender_id,"
         "chat_id:.chat_id}"
     )
 
@@ -282,8 +423,12 @@ def _plan(
             "profile_bound": bool(config.get("profile")),
             "profile_source": config["profile_source"],
             "profile_returned": False,
-            "capture_scope": config["inbox"]["capture_scope"],
-            "thread_complete": config["inbox"]["thread_complete"],
+            "capture_scope": "configured_chat_all",
+            "thread_complete": all(
+                route["inbox"]["thread_complete"] for route in config["routes"]
+            ),
+            "route_count": len(config["routes"]),
+            "multi_chat_routing": len(config["routes"]) > 1,
             "lark_cli_available": executable is not None,
             "install_hint": (
                 None
@@ -436,12 +581,19 @@ def inspect_lark_event_collector(
             ],
         )
         bus_healthy = bus.returncode == 0
-    inbox_status = inspect_lark_event_inbox(
-        project=config["project"],
-        config_path=config["event_inbox_config_ref"],
-        limit=1,
-    )
-    event_count = int(inbox_status.get("captured_count") or 0)
+    inbox_statuses = [
+        inspect_lark_event_inbox(
+            project=config["project"],
+            config_path=route["event_inbox_config_ref"],
+            limit=1,
+        )
+        for route in config["routes"]
+    ]
+    route_event_counts = [
+        int(inbox_status.get("captured_count") or 0) for inbox_status in inbox_statuses
+    ]
+    event_count = sum(route_event_counts)
+    routes_with_event_evidence = sum(count > 0 for count in route_event_counts)
     active = observed.returncode == 0 and (
         config["supervisor"] != "launchd" or "state = running" in observed.stdout
     )
@@ -471,7 +623,15 @@ def inspect_lark_event_collector(
         "event_bus_healthy": bus_healthy,
         "captured_event_count": event_count,
         "real_event_evidence_present": event_count > 0,
-        "thread_complete": config["inbox"]["thread_complete"],
+        "route_count": len(config["routes"]),
+        "multi_chat_routing": len(config["routes"]) > 1,
+        "routes_with_event_evidence_count": routes_with_event_evidence,
+        "all_routes_real_event_evidence_present": (
+            routes_with_event_evidence == len(config["routes"])
+        ),
+        "thread_complete": all(
+            route["inbox"]["thread_complete"] for route in config["routes"]
+        ),
         "local_paths_returned": False,
         "chat_id_returned": False,
         "credentials_returned": False,

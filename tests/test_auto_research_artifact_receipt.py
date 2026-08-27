@@ -3,22 +3,22 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from loopx.capabilities.auto_research.artifact_receipt import (
+from demo.auto_research.artifact_receipt import (
     AUTO_RESEARCH_ARTIFACT_RECEIPT_SCHEMA_VERSION,
     build_auto_research_artifact_receipt,
 )
-from loopx.capabilities.auto_research.delivery_contract import (
+from demo.auto_research.delivery_contract import (
     AUTO_RESEARCH_DELIVERY_CONTRACT_SCHEMA_VERSION,
     normalize_auto_research_delivery_contract,
 )
-from loopx.capabilities.auto_research.evidence_packet import (
+from demo.auto_research.evidence_packet import (
     build_auto_research_evidence_packet,
     build_auto_research_rollout_events,
 )
-from loopx.capabilities.auto_research.research_state import (
+from demo.auto_research.research_state import (
     build_research_evidence_graph_from_rollout_events,
 )
-from loopx.capabilities.auto_research.terminal_result_contract import (
+from demo.auto_research.terminal_result_contract import (
     build_peer_review_event,
     build_terminal_decision_event,
 )

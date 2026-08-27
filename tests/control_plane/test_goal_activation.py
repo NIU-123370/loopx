@@ -13,6 +13,8 @@ from loopx.control_plane.goals.activation import (
     goal_activation_state,
 )
 from loopx.control_plane.goals.activation_service import set_goal_activation_state
+from loopx.control_plane.goals import deletion_service
+from loopx.control_plane.goals.deletion_service import delete_stopped_goal
 from loopx.control_plane.scheduler.execution_context import (
     SchedulerRuntimeProfile,
     scheduler_execution_context_for_runtime_profile,
@@ -404,6 +406,202 @@ def test_owner_confirmed_typed_action_stops_goal(
     assert applied["proposal"]["receipt"]["projection_verified"] is True
     assert applied["proposal"]["receipt"]["outcome"] == "goal_stopped"
     assert goal_activation_state(_goal(global_registry)) is GoalActivationState.STOPPED
+
+
+def test_delete_stopped_goal_removes_source_and_global(
+    connected_registries: tuple[Path, Path],
+) -> None:
+    source_registry, global_registry = connected_registries
+    set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        state="stopped",
+        execute=True,
+    )
+
+    preview = delete_stopped_goal(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        execute=False,
+    )
+    assert preview["dry_run"] is True
+    assert preview["written"] is False
+    assert _goal(source_registry)["id"] == "goal-one"
+    assert _goal(global_registry)["id"] == "goal-one"
+
+    deleted = delete_stopped_goal(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        execute=True,
+    )
+
+    assert deleted["ok"] is True
+    assert deleted["readback"]["verified"] is True
+    assert registry_goals(load_registry(source_registry)) == []
+    assert registry_goals(load_registry(global_registry)) == []
+    assert len(deleted["backup_paths"]) == 2
+
+
+def test_delete_active_goal_fails_closed(
+    connected_registries: tuple[Path, Path],
+) -> None:
+    _source_registry, global_registry = connected_registries
+
+    with pytest.raises(ValueError, match="stop the Goal before deleting it"):
+        delete_stopped_goal(
+            registry_path=global_registry,
+            goal_id="goal-one",
+            execute=True,
+        )
+
+
+def test_delete_orphaned_stopped_global_goal(tmp_path: Path) -> None:
+    _source_registry, global_registry = _orphaned_global_registry(
+        tmp_path,
+        activation_state="stopped",
+    )
+
+    deleted = delete_stopped_goal(
+        registry_path=global_registry,
+        goal_id="orphaned-goal",
+        execute=True,
+    )
+
+    assert deleted["ok"] is True
+    assert deleted["readback"]["verified"] is True
+    assert registry_goals(load_registry(global_registry)) == []
+
+
+def test_owner_confirmed_typed_action_deletes_stopped_goal(
+    connected_registries: tuple[Path, Path], tmp_path: Path,
+) -> None:
+    source_registry, global_registry = connected_registries
+    set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        state="stopped",
+        execute=True,
+    )
+    service = ChatActionService(
+        store=ChatActionStore(tmp_path / "actions"),
+        registry_path=global_registry,
+    )
+    proposal = service.preview(
+        {
+            "action_kind": "goal.lifecycle",
+            "summary": "Delete a stopped Goal",
+            "normalized_parameters": {
+                "goal_id": "goal-one",
+                "operation": "delete",
+                "reason": "Owner confirmed from the workspace",
+            },
+            "context": {"kind": "goal_directory"},
+            "idempotency_key": "delete-goal-one",
+        }
+    )
+
+    applied = service.apply(str(proposal["proposal_id"]))
+
+    assert applied["proposal"]["status"] == "applied"
+    assert applied["proposal"]["receipt"]["outcome"] == "goal_deleted"
+    assert registry_goals(load_registry(source_registry)) == []
+    assert registry_goals(load_registry(global_registry)) == []
+
+
+def test_owner_confirmed_typed_action_rejects_stale_delete_without_writing(
+    connected_registries: tuple[Path, Path], tmp_path: Path,
+) -> None:
+    source_registry, global_registry = connected_registries
+    set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        state="stopped",
+        execute=True,
+    )
+    service = ChatActionService(
+        store=ChatActionStore(tmp_path / "actions"),
+        registry_path=global_registry,
+    )
+    proposal = service.preview(
+        {
+            "action_kind": "goal.lifecycle",
+            "summary": "Delete a stopped Goal",
+            "normalized_parameters": {
+                "goal_id": "goal-one",
+                "operation": "delete",
+            },
+            "context": {"kind": "goal_directory"},
+            "idempotency_key": "stale-delete-goal-one",
+        }
+    )
+    global_payload = load_registry(global_registry)
+    global_payload["goals"].append({"id": "new-goal"})
+    _write_json(global_registry, global_payload)
+
+    applied = service.apply(str(proposal["proposal_id"]))
+
+    assert applied["proposal"]["status"] == "stale"
+    assert applied["proposal"]["receipt"] is None
+    assert _goal(source_registry)["id"] == "goal-one"
+    assert _goal(global_registry)["id"] == "goal-one"
+    assert not list(global_registry.parent.glob("*.goal-delete-*.bak"))
+
+
+def test_goal_deletion_backups_are_unique_and_preserve_preimages(
+    connected_registries: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_registry, global_registry = connected_registries
+    source_payload = load_registry(source_registry)
+    source_payload["goals"].append({
+        "id": "goal-two",
+        "display_name": "Another Goal",
+        "repo": str(source_registry.parent.parent),
+    })
+    _write_json(source_registry, source_payload)
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(global_registry.parent),
+        goal_id="goal-two",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    for goal_id in ("goal-one", "goal-two"):
+        assert set_goal_activation_state(
+            registry_path=global_registry,
+            goal_id=goal_id,
+            state="stopped",
+            execute=True,
+        )["ok"] is True
+
+    monkeypatch.setattr(
+        deletion_service,
+        "now_local_iso",
+        lambda: "2026-08-25T12:00:00+00:00",
+    )
+    first = delete_stopped_goal(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        execute=True,
+    )
+    second = delete_stopped_goal(
+        registry_path=global_registry,
+        goal_id="goal-two",
+        execute=True,
+    )
+
+    backup_paths = first["backup_paths"] + second["backup_paths"]
+    assert len(backup_paths) == 4
+    assert len(set(backup_paths)) == 4
+    first_preimages = [
+        set(item.get("id") for item in json.loads(Path(path).read_text())["goals"])
+        for path in first["backup_paths"]
+    ]
+    second_preimages = [
+        set(item.get("id") for item in json.loads(Path(path).read_text())["goals"])
+        for path in second["backup_paths"]
+    ]
+    assert all({"goal-one", "goal-two"}.issubset(ids) for ids in first_preimages)
+    assert all("goal-one" not in ids and "goal-two" in ids for ids in second_preimages)
 
 
 def test_owner_confirmed_typed_action_stops_orphaned_global_goal(

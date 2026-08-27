@@ -38,7 +38,10 @@ def register_quota_command(
         default="status",
         help="Use status for all groups, plan for next-turn groups, should-run for one goal, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
-    quota_parser.add_argument("--goal-id", help="Goal id to check. Required for one-goal quota commands, including should-run, scheduler ACK/failure, spend, and void.")
+    quota_parser.add_argument(
+        "--goal-id",
+        help="Goal id to check. Required for one-goal quota commands, including should-run, scheduler ACK/failure, spend, and void.",
+    )
     quota_parser.add_argument(
         "--agent-id",
         help=(
@@ -157,9 +160,10 @@ def register_quota_command(
         "--turn-instance-id",
         help=(
             "Stable heartbeat settlement id for `quota should-run`, "
-            "`quota monitor-poll`, and `quota spend-slot`. The guard persists "
-            "one idempotent receipt; reuse the same id through monitor "
-            "writeback, refresh-state, spend, and retries."
+            "`quota monitor-poll`, scheduler ACK/failure follow-ups, and "
+            "`quota spend-slot`. The guard persists one idempotent receipt; "
+            "reuse the same id through monitor writeback, scheduler handoff, "
+            "refresh-state, spend, and retries."
         ),
     )
     quota_parser.add_argument(
@@ -180,28 +184,54 @@ def register_quota_command(
             "cannot be combined with --todo-id."
         ),
     )
-    quota_parser.add_argument("--slots", type=int, default=1, help="Slots to account for `quota spend-slot`.")
+    quota_parser.add_argument(
+        "--slots", type=int, default=1, help="Slots to account for `quota spend-slot`."
+    )
     quota_parser.add_argument(
         "--source",
         choices=sorted(VALID_SLOT_SPEND_SOURCES),
         default=DEFAULT_SLOT_SPEND_SOURCE,
         help="Source label for `quota spend-slot`.",
     )
-    quota_parser.add_argument("--void-generated-at", help="generated_at timestamp of the quota_slot_spent run to void.")
-    quota_parser.add_argument("--reason-summary", help="Public-safe reason for `quota void-slot`.")
+    quota_parser.add_argument(
+        "--void-generated-at",
+        help="generated_at timestamp of the quota_slot_spent run to void.",
+    )
+    quota_parser.add_argument(
+        "--reason-summary", help="Public-safe reason for `quota void-slot`."
+    )
     register_quota_monitor_poll_request_arguments(quota_parser)
-    quota_parser.add_argument("--surface", default="codex_app", help="Scheduler surface for scheduler ACK/failure commands; defaults to codex_app.")
-    quota_parser.add_argument("--state-key", default="scheduler_hint.codex_app.stateful_backoff", help="Scheduler state key for scheduler ACK/failure commands.")
-    quota_parser.add_argument("--applied-rrule", help="RRULE successfully applied by the host before `quota scheduler-ack --execute`.")
-    quota_parser.add_argument("--failed-rrule", help="RRULE whose host update failed before `quota scheduler-fail-current --execute`.")
+    quota_parser.add_argument(
+        "--surface",
+        default="codex_app",
+        help="Scheduler surface for scheduler ACK/failure commands; defaults to codex_app.",
+    )
+    quota_parser.add_argument(
+        "--state-key",
+        default="scheduler_hint.codex_app.stateful_backoff",
+        help="Scheduler state key for scheduler ACK/failure commands.",
+    )
+    quota_parser.add_argument(
+        "--applied-rrule",
+        help="RRULE successfully applied by the host before `quota scheduler-ack --execute`.",
+    )
+    quota_parser.add_argument(
+        "--failed-rrule",
+        help="RRULE whose host update failed before `quota scheduler-fail-current --execute`.",
+    )
     quota_parser.add_argument(
         "--failure-kind",
         choices=["host_tool_failure", "timeout", "rejected", "unavailable"],
         default="host_tool_failure",
         help="Bounded public-safe failure category for scheduler-fail-current.",
     )
-    quota_parser.add_argument("--reset-token", help="Optional reset token to validate before scheduler ack.")
-    quota_parser.add_argument("--identity-signature", help="Optional identity signature to validate before scheduler ack.")
+    quota_parser.add_argument(
+        "--reset-token", help="Optional reset token to validate before scheduler ack."
+    )
+    quota_parser.add_argument(
+        "--identity-signature",
+        help="Optional identity signature to validate before scheduler ack.",
+    )
     quota_parser.add_argument(
         "--host-match-observed",
         action="store_true",
@@ -220,8 +250,16 @@ def register_quota_command(
             "sets this automatically."
         ),
     )
-    quota_parser.add_argument("--dry-run", action="store_true", help="Keep quota accounting or scheduler-state writes as preview-only. This is the default.")
-    quota_parser.add_argument("--execute", action="store_true", help="Execute the quota accounting write or no-spend scheduler-state ack.")
+    quota_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Keep quota accounting or scheduler-state writes as preview-only. This is the default.",
+    )
+    quota_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute the quota accounting write or no-spend scheduler-state ack.",
+    )
     quota_parser.add_argument(
         "--record-host-poll",
         action="store_true",

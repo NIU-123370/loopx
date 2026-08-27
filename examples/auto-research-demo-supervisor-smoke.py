@@ -14,14 +14,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.demo_supervisor import (  # noqa: E402
+from demo.auto_research.demo_supervisor import (  # noqa: E402
     AUTO_RESEARCH_DEMO_SUPERVISOR_SCHEMA_VERSION,
     build_auto_research_demo_supervisor_plan,
 )
-from loopx.capabilities.auto_research.preset import (  # noqa: E402
+from demo.auto_research.preset import (  # noqa: E402
     AUTO_RESEARCH_PRESET_SCHEMA_VERSION,
 )
-from loopx.capabilities.auto_research.user_contract import (  # noqa: E402
+from demo.auto_research.user_contract import (  # noqa: E402
     build_auto_research_preset_context,
 )
 
@@ -424,7 +424,7 @@ def main() -> int:
     assert "## Lane Timeline" in markdown, markdown
     assert "required_worker_playbook: `loopx-auto-research`" in markdown, markdown
     assert "skill_distribution: `worker_local`" in markdown, markdown
-    assert "worker_skill_source: `loopx/capabilities/auto_research/worker_skill/SKILL.md`" in markdown, markdown
+    assert "worker_skill_source: `demo/auto_research/worker_skill/SKILL.md`" in markdown, markdown
     assert "## One-Click Dry Run" in markdown, markdown
     assert "visible_codex_tui_lanes" in markdown, markdown
     assert "## Demo Acceptance" not in markdown, markdown

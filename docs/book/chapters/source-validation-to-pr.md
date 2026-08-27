@@ -434,7 +434,7 @@ What remains owner-held?
 ## 关联 Issue 与公开任务
 
 非 trivial 工作优先关联
-[`CONTRIBUTOR_TASKS.md`](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
 或 GitHub Issue：
 
 - 在开始大改前声明准备处理的 slice；
@@ -472,6 +472,71 @@ Issue 是公开协作边界，不是把本地 Goal state 整体粘贴上去的�
 5. PR 描述和文档是否也要重组？
 
 如果 review 暴露协议歧义，先达成语义共识；不要让两个相互矛盾的 test 同时“通过”。
+
+## 两个真实社区贡献案例
+
+本节与英文对应章节保持语义镜像；案例事实、结论、链接目标或风险边界的实质差异属于文档缺陷。
+
+<!-- community-casebook:small-pr:start -->
+<!-- community-casebook:small-pr-problem -->
+
+### 案例一：把一个 CLI 不一致修成完整小 PR
+
+[PR #3540](https://github.com/huangruiteng/loopx/pull/3540)
+来自一次真实 first-run/deep-use 观察：`loopx --format json doctor` 可以工作，但更符合用户直觉的
+`loopx doctor --format json` 会在 argparse 阶段失败。贡献者没有新建第二套 renderer，而是复用
+现有 subcommand format contract。
+
+<!-- community-casebook:small-pr-scope -->
+
+最终改动只涉及 parser wiring、doctor handler 与一条端到端 CLI regression。验证同时覆盖：
+
+- 新的子命令参数位置；
+- 旧的全局参数位置；
+- 二者同时出现时的 precedence；
+- 非法格式在执行诊断前 fail closed。
+
+<!-- community-casebook:small-pr-lesson -->
+
+这个案例的价值不在“只改了几行”，而在于它形成了完整链条：
+
+```text
+真实用户摩擦
+  -> 已有公共合同
+  -> 正确 owner
+  -> 正向、兼容与负向验证
+  -> reviewer 可独立判断
+```
+
+小 PR 不等于低标准。它只是把同一个用户结果控制在更容易验证和回滚的范围内。
+<!-- community-casebook:small-pr:end -->
+
+<!-- community-casebook:review-repair:start -->
+<!-- community-casebook:review-repair-problem -->
+
+### 案例二：用反例评审高风险状态写入
+
+[PR #3529](https://github.com/huangruiteng/loopx/pull/3529)
+把 shared-goal coordination 的 aggregate head、file provider 和 `claim_work` executor 做成一个
+provider-neutral Stage 2 切片。第一版已有大量正向测试，但 reviewer 仍构造了更强的非法状态：
+partial write 被误报为 `applied`、损坏 receipt 导致未分类异常、超大 TTL 越过 typed boundary、
+Windows 无法导入锁实现，以及无时区时间和 bool-as-int 进入持久状态。
+
+<!-- community-casebook:review-repair-response -->
+
+作者没有给这些输入逐个加字符串特判，而是修复它们共同指向的 trust boundary：
+
+- durable write 必须 write-all、fsync、atomic replace，并在不确定时返回 `ambiguous`；
+- persisted receipt、timestamp 与 generation 在进入 executor 前完成 typed validation；
+- lock 复用仓库已有跨平台 owner；
+- RFC、负例测试和 CI 同步记录 machine-enforced obligation。
+
+<!-- community-casebook:review-repair-lesson -->
+
+这个案例说明，review 不是在代码完成后“挑风格”。高价值 review 会提出一个能击穿当前 invariant
+的具体 counterexample，并要求修复落在真正的 owner；作者则用新的负例证明同类非法状态不能再次
+进入 semantic core。最终 `APPROVE` 只适用于重新验证后的 exact head。
+<!-- community-casebook:review-repair:end -->
 
 ## Merge 后还要验证什么
 

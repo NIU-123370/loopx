@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from .contract import (
-    TODO_RESUME_KIND_CAPACITY_AVAILABLE,
     TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_MONITOR,
@@ -17,6 +16,7 @@ from .contract import (
     normalize_todo_status,
     normalize_todo_task_class,
 )
+from .resume_condition import evaluate_todo_resume_conditions
 from .projection import (
     todo_item_excludes_agent,
     todo_item_is_deferred,
@@ -47,32 +47,24 @@ def resolve_capacity_resume_summary(
     available = set(normalize_required_capabilities(available_capabilities))
     resolved = dict(value)
     deferred_items = todo_summary_deferred_items(value, "deferred_items")
+    source_items = [
+        item
+        for item in value.get("items", [])
+        if isinstance(item, dict)
+    ]
+    conditions = evaluate_todo_resume_conditions(
+        deferred_items,
+        source_items=[*source_items, *deferred_items],
+        available_capabilities=available,
+        kinds=["capacity_available"],
+    )
     for item in deferred_items:
-        resume_when = normalize_todo_resume_when(item.get("resume_when")) or ""
-        kind, separator, target = resume_when.partition(":")
-        if kind != TODO_RESUME_KIND_CAPACITY_AVAILABLE or not separator or not target:
+        todo_id = normalize_todo_id(item.get("todo_id"))
+        condition = conditions.get(todo_id or "")
+        if condition is None:
             continue
-        satisfied = target in available
-        condition = (
-            dict(item.get("resume_condition"))
-            if isinstance(item.get("resume_condition"), dict)
-            else {}
-        )
-        condition.update(
-            {
-                "schema_version": "todo_resume_condition_v0",
-                "resume_when": resume_when,
-                "kind": kind,
-                "target": target,
-                "capability": target,
-                "provider": "runtime_available_capabilities",
-                "provider_required": False,
-                "satisfied": satisfied,
-            }
-        )
-        condition.pop("unsupported", None)
         item["resume_condition"] = condition
-        item["resume_ready"] = satisfied
+        item["resume_ready"] = condition.get("satisfied") is True
     resolved["deferred_items"] = deferred_items
     resolved["deferred_resume_candidates"] = [
         item for item in deferred_items if item.get("resume_ready") is True
@@ -126,6 +118,7 @@ def _compact_deferred_resume_item(
         "excluded_agents",
         "unblocks_todo_id",
         "resume_when",
+        "resume_monitor_generation",
         "resume_condition",
         "resume_ready",
         "no_followup",
@@ -138,6 +131,7 @@ def _compact_deferred_resume_item(
         "result_hash",
         "consecutive_no_change",
         "material_change",
+        "material_change_generation",
         "max_no_change_before_replan",
         "route_continuation_replan_required",
         "route_continuation_reason",
@@ -281,6 +275,11 @@ def todo_summary_monitor_blocked_resume_items(
             if isinstance(item.get("resume_condition"), dict)
             else {}
         )
+        if condition.get("kind") == "monitor_changed":
+            # This is the intentional typed wait lifecycle.  The monitor stays
+            # independently schedulable and its generation fence owns resume;
+            # do not reinterpret it as the legacy todo_done:<monitor> repair gap.
+            continue
         target_todo_id = normalize_todo_id(
             condition.get("target_todo_id") or condition.get("target")
         )

@@ -121,5 +121,12 @@ jobs:
           tests/test_file_lock_cross_process.py
           tests/control_plane/test_coordination_file_provider.py
           tests/control_plane/test_effect_runtime_integration.py
+          tests/control_plane/test_scheduler_heartbeat_commit_runtime.py
           tests/test_self_update_runtime_activation.py
           tests/test_windows_install.py
+
+      - name: Run native scheduler facade tests
+        run: >-
+          node --no-warnings --experimental-strip-types --test
+          tests/control_plane_ts/scheduler_heartbeat_commit.test.ts
+          tests/control_plane_ts/scheduler_heartbeat_commit_cli.test.ts

@@ -19,23 +19,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research import (  # noqa: E402
+from demo.auto_research import (  # noqa: E402
     LIGHTWEIGHT_AUTO_RESEARCH_RESULT_SCHEMA_VERSION,
     lightweight_hypothesis,
     run_lightweight_auto_research,
 )
 
 
-KERNEL = REPO_ROOT / "loopx/capabilities/auto_research/kernel.py"
-CORE = REPO_ROOT / "loopx/capabilities/auto_research/core.py"
-INIT = REPO_ROOT / "loopx/capabilities/auto_research/__init__.py"
-EVIDENCE_PACKET = REPO_ROOT / "loopx/capabilities/auto_research/evidence_packet.py"
-ROLLOUT_APPEND = REPO_ROOT / "loopx/capabilities/auto_research/rollout_append.py"
-LIVE_EVIDENCE = REPO_ROOT / "loopx/capabilities/auto_research/live_evidence.py"
-RESEARCH_STATE = REPO_ROOT / "loopx/capabilities/auto_research/research_state.py"
-HUMAN_VIEW = REPO_ROOT / "loopx/capabilities/auto_research/human_view.py"
-WORKER_RUNTIME = REPO_ROOT / "loopx/capabilities/auto_research/worker_runtime.py"
-CLI = REPO_ROOT / "loopx/capabilities/auto_research/cli.py"
+KERNEL = REPO_ROOT / "demo/auto_research/kernel.py"
+CORE = REPO_ROOT / "demo/auto_research/core.py"
+INIT = REPO_ROOT / "demo/auto_research/__init__.py"
+EVIDENCE_PACKET = REPO_ROOT / "demo/auto_research/evidence_packet.py"
+ROLLOUT_APPEND = REPO_ROOT / "demo/auto_research/rollout_append.py"
+LIVE_EVIDENCE = REPO_ROOT / "demo/auto_research/live_evidence.py"
+RESEARCH_STATE = REPO_ROOT / "demo/auto_research/research_state.py"
+HUMAN_VIEW = REPO_ROOT / "demo/auto_research/human_view.py"
+WORKER_RUNTIME = REPO_ROOT / "demo/auto_research/worker_runtime.py"
+CLI = REPO_ROOT / "demo/auto_research/cli.py"
 
 KERNEL_FORBIDDEN_MARKERS = [
     "legacy" + "_core",
@@ -111,8 +111,8 @@ def assert_evidence_packet_boundary() -> None:
     cli_text = CLI.read_text(encoding="utf-8")
     legacy_name = "legacy" + "_core"
     quickstart_name = "quickstart" + "_seed"
-    assert not (REPO_ROOT / f"loopx/capabilities/auto_research/{legacy_name}.py").exists()
-    assert not (REPO_ROOT / f"loopx/capabilities/auto_research/{quickstart_name}.py").exists()
+    assert not (REPO_ROOT / f"demo/auto_research/{legacy_name}.py").exists()
+    assert not (REPO_ROOT / f"demo/auto_research/{quickstart_name}.py").exists()
     assert legacy_name not in evidence_text
     assert legacy_name not in cli_text
     assert f"from .{legacy_name} import" not in rollout_text

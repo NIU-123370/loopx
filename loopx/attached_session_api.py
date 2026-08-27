@@ -81,12 +81,21 @@ class AttachedSessionRequestMixin:
         try:
             closed = self.server.runtime_controller.close_session(session_id)
         except RuntimeError as exc:
-            if str(exc) != "attached_session_turn_active":
+            error_code = str(exc)
+            messages = {
+                "attached_session_turn_active": (
+                    "complete the active attached Agent turn before closing the session"
+                ),
+                "attached_session_queue_pending": (
+                    "complete queued attached Agent turns before closing the session"
+                ),
+            }
+            if error_code not in messages:
                 raise
             self._send_error(
-                "complete the active attached Agent turn before closing the session",
+                messages[error_code],
                 status=409,
-                error_code="attached_session_turn_active",
+                error_code=error_code,
             )
             return
         if not closed:

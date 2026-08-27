@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from ..agent_registry import (
@@ -11,16 +11,6 @@ from ..agent_registry import (
     registered_agent_ids_from_registry,
     require_registered_agent_id,
 )
-from ..execution_profile import execution_profile_turn_granularity
-from ..heartbeat_prompt import (
-    build_heartbeat_prompt,
-    build_heartbeat_prompt_error_payload,
-    render_heartbeat_prompt_markdown,
-)
-from ..heartbeat_prequota import (
-    render_heartbeat_pre_quota_markdown,
-    run_heartbeat_pre_quota,
-)
 from ..chat_server import (
     DEFAULT_CHAT_HOST,
     DEFAULT_CHAT_PORT,
@@ -28,6 +18,16 @@ from ..chat_server import (
 )
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from ..dashboard_launcher import launch_dashboard
+from ..execution_profile import execution_profile_turn_granularity
+from ..heartbeat_prequota import (
+    render_heartbeat_pre_quota_markdown,
+    run_heartbeat_pre_quota,
+)
+from ..heartbeat_prompt import (
+    build_heartbeat_prompt,
+    build_heartbeat_prompt_error_payload,
+    render_heartbeat_prompt_markdown,
+)
 from ..paths import default_public_scan_root
 from ..presentation.renderers.status_markdown import render_status_markdown
 from ..promotion_gate import (
@@ -58,10 +58,6 @@ from ..status_server import (
     serve_status,
 )
 from ..upgrade import build_upgrade_plan, render_upgrade_plan_markdown
-from .support_control_registry import (
-    explicit_global_registry,
-    resolve_heartbeat_active_state,
-)
 from .support_control_backup import (
     handle_backup_state_command,
     register_backup_state_command,
@@ -70,12 +66,18 @@ from .support_control_chat_endpoint import (
     handle_chat_endpoint_command,
     register_chat_endpoint_command,
 )
+from .support_control_heartbeat_registration import (
+    register_heartbeat_control_commands,
+)
+from .support_control_registry import (
+    explicit_global_registry,
+    resolve_heartbeat_active_state,
+)
 from .support_control_supervisor import (
     SUPERVISOR_CONTROL_COMMANDS,
     handle_supervisor_control_command,
     register_supervisor_control_commands,
 )
-
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -106,164 +108,7 @@ def register_support_control_commands(
     add_subcommand_format: AddFormat,
 ) -> None:
     register_backup_state_command(subparsers, add_subcommand_format)
-
-    heartbeat_prompt_parser = subparsers.add_parser(
-        "heartbeat-prompt",
-        help="Generate a guarded heartbeat or visible-goal host-loop task body.",
-    )
-    add_subcommand_format(heartbeat_prompt_parser)
-    heartbeat_prompt_parser.add_argument(
-        "--goal-id", required=True, help="Stable LoopX goal id."
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--active-state",
-        help="Active goal state file the heartbeat should read and write back. Defaults to the registry goal state_file.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--material-rule",
-        help="Optional project-specific material queue rule appended to the task body.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--permission-rule",
-        help="Optional trusted-session permission rule appended to the task body.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--cli-bin",
-        default="loopx",
-        help="Command name embedded in generated preflight/guard/spend commands. Use loopx-canary for gray rollout targets.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--agent-id",
-        help="Optional public-safe automation agent id, such as codex-main-control or codex-side-bypass.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--turn-instance-id",
-        help=(
-            "Optional exact public-safe heartbeat receipt id. Requires an exact "
-            "agent id and a receipt-producing runtime profile."
-        ),
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--agent-scope",
-        dest="agent_scopes",
-        action="append",
-        help="Optional natural-language scope for this automation agent. Repeat for multiple scope lines.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--available-capability",
-        dest="available_capabilities",
-        action="append",
-        help=(
-            "Declare a capability available in this host loop, such as network or "
-            "external_evidence_poll. Repeat for multiple capabilities; generated "
-            "quota guard and spend commands preserve the declaration."
-        ),
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--runtime-profile",
-        choices=[profile.value for profile in SchedulerRuntimeProfile],
-        help=(
-            "Embed one explicit scheduler runtime profile in the generated quota "
-            "guard. Cannot be combined with the explicit scheduler context fields."
-        ),
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--codex-app",
-        action="store_true",
-        help=(
-            "Compact explicit alias for --runtime-profile "
-            "codex_app_heartbeat in generated heartbeat commands."
-        ),
-    )
-    heartbeat_prompt_parser.add_argument(
-        "--visible-goal-host",
-        choices=["traex-cli"],
-        help=(
-            "Render the visible Goal task contract for an explicitly verified "
-            "host while preserving its scheduler runtime profile."
-        ),
-    )
-    heartbeat_prompt_parser.add_argument(
-        "-H",
-        "--host-surface",
-        choices=[
-            "ark_managed_agent",
-            "codex_app",
-            "codex_app_ssh",
-            "codex_cli",
-            "generic_cli",
-            "claude_code",
-            "kunluncode",
-            "local_scheduler",
-        ],
-        help="Host surface embedded in the generated quota guard.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "-O",
-        "--scheduler-owner",
-        choices=[
-            "host_automation",
-            "agent_cli_loop",
-            "goal_runtime",
-            "outer_controller",
-            "none",
-        ],
-        help="Cadence owner embedded in the generated quota guard.",
-    )
-    heartbeat_prompt_parser.add_argument(
-        "-M",
-        "--execution-mode",
-        choices=["interactive", "isolated_headless", "hosted_automation"],
-        help="Execution mode embedded in the generated quota guard.",
-    )
-    heartbeat_style_group = heartbeat_prompt_parser.add_mutually_exclusive_group()
-    heartbeat_style_group.add_argument(
-        "--full",
-        action="store_true",
-        help="Generate the expanded audit body. The default installed heartbeat body is thin.",
-    )
-    heartbeat_style_group.add_argument(
-        "--compact",
-        action="store_true",
-        help="Generate a shorter automation body that points edge cases back to the expanded lifecycle contract.",
-    )
-    heartbeat_style_group.add_argument(
-        "--brief",
-        action="store_true",
-        help="Generate a minimal installed automation body that delegates details to the compact lifecycle contract.",
-    )
-    heartbeat_style_group.add_argument(
-        "--thin",
-        action="store_true",
-        help="Generate the thinnest generic dispatcher body for trusted agents that inspect LoopX state themselves.",
-    )
-
-    heartbeat_prequota_parser = subparsers.add_parser(
-        "heartbeat-prequota",
-        help=(
-            "Run best-effort kernel reconciliation hooks before heartbeat quota "
-            "selection without spending quota."
-        ),
-    )
-    add_subcommand_format(heartbeat_prequota_parser)
-    heartbeat_prequota_parser.add_argument(
-        "-g",
-        "--goal-id",
-        required=True,
-        help="Stable LoopX goal id.",
-    )
-    heartbeat_prequota_parser.add_argument(
-        "-a",
-        "--agent-id",
-        required=True,
-        help="Registered heartbeat lifecycle actor.",
-    )
-    heartbeat_prequota_parser.add_argument(
-        "--fetch-timeout-seconds",
-        type=int,
-        default=10,
-        help="Timeout for each bounded compact external metadata fetch.",
-    )
+    register_heartbeat_control_commands(subparsers, add_subcommand_format)
 
     register_supervisor_control_commands(subparsers, add_subcommand_format)
 

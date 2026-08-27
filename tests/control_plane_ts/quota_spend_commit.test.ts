@@ -1,0 +1,360 @@
+import assert from "node:assert/strict";
+import {
+  readFile,
+  mkdtemp,
+  readdir,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import test from "node:test";
+
+import {
+  evaluateQuotaSpendCommit,
+  quotaSpendIndexDigest,
+  QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
+} from "../../loopx/control_plane/quota/spend_commit.ts";
+
+const goalId = "quota-spend-transaction";
+
+function decision(
+  spentSlots: number,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    should_run: true,
+    normal_delivery_allowed: true,
+    recovery_delivery_allowed: false,
+    effective_action: "advance",
+    self_repair_allowed: false,
+    capability_repair_allowed: false,
+    workspace_repair_allowed: false,
+    state: "eligible",
+    safe_bypass_allowed: false,
+    safe_bypass_kind: null,
+    blocked_action_scope: null,
+    compute: 1,
+    window_hours: 24,
+    slot_minutes: 1,
+    spent_slots: spentSlots,
+    allowed_slots: 1440,
+    ...extra,
+  };
+}
+
+function preview(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ok: true,
+    mode: "spend-slot",
+    dry_run: true,
+    goal_id: goalId,
+    slots: 1,
+    agent_id: "codex-main-control",
+    appended: false,
+    registry_mutated: false,
+    before: decision(0),
+    after: decision(1),
+    after_recommended_action: "inspect next quota should-run decision",
+    would_throttle: false,
+    delivery_completion_spend: false,
+    safe_bypass_spend: false,
+    delivery_workspace_validated: false,
+    ...extra,
+  };
+}
+
+function request(
+  runtimeRoot: string | null,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const value = preview();
+  return {
+    schema_version: QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
+    effect_id: "quota-spend-effect-1",
+    runtime_root: runtimeRoot,
+    goal_id: goalId,
+    source: "heartbeat",
+    generated_at: "2026-08-25T12:00:00+08:00",
+    execute: runtimeRoot !== null,
+    expected_index_digest: null,
+    preview: value,
+    before: value.before,
+    after: value.after,
+    resolved_agent_id: "codex-main-control",
+    ...extra,
+  };
+}
+
+async function tempRuntime(t: test.TestContext): Promise<string> {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-quota-spend-commit-"));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  return runtimeRoot;
+}
+
+test("preview constructs the typed public-safe spend record without writing", async () => {
+  const result = await evaluateQuotaSpendCommit(request(null));
+  assert.equal(result.status, "preview");
+  assert.equal(result.written, false);
+  assert.equal(result.record?.classification, "quota_slot_spent");
+  assert.equal(result.record?.agent_id, "codex-main-control");
+  const event = result.record?.quota_event as Record<string, unknown>;
+  assert.equal(event.source, "heartbeat");
+  assert.equal(event.slots, 1);
+  assert.equal(
+    (event.after as Record<string, unknown>).spent_slots,
+    1,
+  );
+});
+
+test("illegal spend transitions fail before any durable effect", async () => {
+  const value = preview({ safe_bypass_spend: false });
+  const rejected = request(null, {
+    preview: value,
+    before: decision(0, {
+      should_run: false,
+      normal_delivery_allowed: false,
+      state: "waiting",
+    }),
+    after: decision(1, {
+      should_run: false,
+      normal_delivery_allowed: false,
+      state: "waiting",
+    }),
+  });
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(rejected),
+    /requires an eligible, safe-bypass/,
+  );
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(request(null, { after: decision(2) })),
+    /after\.spent_slots must equal before\.spent_slots \+ slots/,
+  );
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(request(null, { source: "unknown" })),
+    /quota slot spend source must be one of/,
+  );
+});
+
+test("delivery completion attribution survives later repair frontiers", async () => {
+  const repairFrontiers = [
+    {
+      effective_action: "capability_bridge_repair",
+      capability_repair_allowed: true,
+    },
+    {
+      effective_action: "control_plane_projection_repair",
+      self_repair_allowed: true,
+    },
+  ];
+  for (const repairFrontier of repairFrontiers) {
+    const before = decision(0, repairFrontier);
+    const after = decision(1, repairFrontier);
+    const value = preview({
+      delivery_completion_spend: true,
+      delivery_run_classification: "state_refreshed",
+      delivery_run_recommended_action: "inspect the next delivery frontier",
+    });
+    const result = await evaluateQuotaSpendCommit(request(null, {
+      source: "visible-goal",
+      preview: value,
+      before,
+      after,
+    }));
+
+    assert.equal(
+      result.record?.health_check,
+      "quota validated delivery completion; quota slot spend event public-safe",
+    );
+    const event = result.record?.quota_event as Record<string, unknown>;
+    assert.match(
+      String(event.reason_summary),
+      /accounted after validated delivery state_refreshed/,
+    );
+    assert.equal(
+      result.record?.recommended_action,
+      "inspect the next delivery frontier",
+    );
+  }
+});
+
+test("commit owns JSON, Markdown, index, and exact-effect replay", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request(runtimeRoot);
+  const written = await evaluateQuotaSpendCommit(params);
+  assert.equal(written.status, "written");
+  assert.equal(written.written, true);
+  assert.equal(written.payload.appended, true);
+
+  const jsonPath = String(written.payload.json_path);
+  const markdownPath = String(written.payload.markdown_path);
+  const indexPath = String(written.payload.index_path);
+  const record = JSON.parse(await readFile(jsonPath, "utf8")) as Record<string, unknown>;
+  assert.equal(record.classification, "quota_slot_spent");
+  assert.match(await readFile(markdownPath, "utf8"), /LoopX Quota Slot Preview/);
+  const rows = (await readFile(indexPath, "utf8")).trim().split("\n");
+  assert.equal(rows.length, 1);
+
+  const replayed = await evaluateQuotaSpendCommit(params);
+  assert.equal(replayed.status, "replayed");
+  assert.equal(replayed.replayed, true);
+  assert.equal(replayed.payload.appended, false);
+  assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 1);
+});
+
+test("prepared transaction repairs partial artifacts exactly once", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request(runtimeRoot);
+  const written = await evaluateQuotaSpendCommit(params);
+  const markdownPath = String(written.payload.markdown_path);
+  const indexPath = String(written.payload.index_path);
+  await unlink(markdownPath);
+  await unlink(indexPath);
+
+  const repaired = await evaluateQuotaSpendCommit(params);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.repaired, true);
+  assert.equal(repaired.payload.transaction_repaired, true);
+  assert.match(await readFile(markdownPath, "utf8"), /quota_slot_spent/);
+  assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 1);
+
+  const replayed = await evaluateQuotaSpendCommit(params);
+  assert.equal(replayed.status, "replayed");
+});
+
+test("prepared transactions keep artifact paths reserved across later spends", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const firstParams = request(runtimeRoot);
+  const first = await evaluateQuotaSpendCommit(firstParams);
+  const firstJsonPath = String(first.payload.json_path);
+  const firstMarkdownPath = String(first.payload.markdown_path);
+  const indexPath = String(first.payload.index_path);
+  const transactionDir = join(dirname(indexPath), ".transactions", "quota-spend");
+  const receiptPaths = (await readdir(transactionDir)).map((name) =>
+    join(transactionDir, name)
+  );
+  const firstReceiptPath = receiptPaths[0];
+  assert.ok(firstReceiptPath);
+  const firstReceipt = JSON.parse(
+    await readFile(firstReceiptPath, "utf8"),
+  ) as Record<string, unknown>;
+  firstReceipt.status = "prepared";
+  await writeFile(firstReceiptPath, `${JSON.stringify(firstReceipt, null, 2)}\n`, "utf8");
+  await Promise.all([
+    unlink(firstJsonPath),
+    unlink(firstMarkdownPath),
+    unlink(indexPath),
+  ]);
+
+  const second = await evaluateQuotaSpendCommit(request(runtimeRoot, {
+    effect_id: "quota-spend-effect-2",
+  }));
+  assert.equal(second.status, "written");
+  assert.notEqual(second.payload.json_path, firstJsonPath);
+  assert.notEqual(second.payload.markdown_path, firstMarkdownPath);
+
+  const repaired = await evaluateQuotaSpendCommit(firstParams);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.transaction_repaired, true);
+});
+
+test("prepared transaction repairs its own truncated final index row", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const firstParams = request(runtimeRoot);
+  const first = await evaluateQuotaSpendCommit(firstParams);
+  const indexPath = String(first.payload.index_path);
+  const firstRow = (await readFile(indexPath, "utf8")).trim();
+  const params = request(runtimeRoot, {
+    effect_id: "quota-spend-effect-2",
+    generated_at: "2026-08-25T12:02:00+08:00",
+    expected_index_digest: await quotaSpendIndexDigest(indexPath),
+  });
+  await evaluateQuotaSpendCommit(params);
+  const transactionDir = join(dirname(indexPath), ".transactions", "quota-spend");
+  const receiptPaths = (await readdir(transactionDir)).map((name) =>
+    join(transactionDir, name)
+  );
+  const receipts = await Promise.all(receiptPaths.map(async (path) => ({
+    path,
+    value: JSON.parse(
+      await readFile(path, "utf8"),
+    ) as Record<string, unknown>,
+  })));
+  const selected = receipts.find(({ value }) => value.effect_id === params.effect_id);
+  assert.ok(selected);
+  const receipt = selected.value;
+  receipt.status = "prepared";
+  await writeFile(selected.path, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+
+  const expectedLine = JSON.stringify(receipt.index_record);
+  await writeFile(
+    indexPath,
+    `${firstRow}\n${
+      expectedLine.slice(0, Math.floor(expectedLine.length / 2))
+    }`,
+    "utf8",
+  );
+
+  const repaired = await evaluateQuotaSpendCommit(params);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.transaction_repaired, true);
+  const rows = (await readFile(indexPath, "utf8")).trim().split("\n");
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0], firstRow);
+  assert.equal(
+    (JSON.parse(rows[1]).quota_spend_commit as Record<string, unknown>).effect_id,
+    params.effect_id,
+  );
+
+  const replayed = await evaluateQuotaSpendCommit(params);
+  assert.equal(replayed.status, "replayed");
+
+  await writeFile(indexPath, `${firstRow}\n{\"different\":`, "utf8");
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(params),
+    /quota run index line 2 is malformed/,
+  );
+});
+
+test("effect identity and index CAS reject drift and racing writers", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request(runtimeRoot);
+  const first = await evaluateQuotaSpendCommit(params);
+  const changed = await evaluateQuotaSpendCommit({
+    ...params,
+    source: "controller",
+  });
+  assert.equal(changed.status, "conflict");
+  assert.equal(changed.reason_code, "effect_id_conflict");
+
+  const stale = await evaluateQuotaSpendCommit(request(runtimeRoot, {
+    effect_id: "quota-spend-effect-stale",
+  }));
+  assert.equal(stale.status, "conflict");
+  assert.equal(stale.reason_code, "index_digest_conflict");
+
+  const indexPath = String(first.payload.index_path);
+  const currentDigest = await quotaSpendIndexDigest(indexPath);
+  const fresh = await evaluateQuotaSpendCommit(request(runtimeRoot, {
+    effect_id: "quota-spend-effect-2",
+    generated_at: "2026-08-25T12:02:00+08:00",
+    expected_index_digest: currentDigest,
+  }));
+  assert.equal(fresh.status, "written");
+});
+
+test("concurrent exact-effect retries serialize to one spend", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request(runtimeRoot);
+  const results = await Promise.all([
+    evaluateQuotaSpendCommit(params),
+    evaluateQuotaSpendCommit(params),
+  ]);
+  assert.deepEqual(
+    results.map((item) => item.status).sort(),
+    ["replayed", "written"],
+  );
+  const indexPath = String(results[0].payload.index_path);
+  assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 1);
+});

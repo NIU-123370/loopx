@@ -95,6 +95,8 @@ def main() -> int:
         "output/frontstage-pages/site/site-assets/star-history.svg",
         "python3 examples/dev-book-publication-smoke.py",
         "python3 examples/dev-book-publication-smoke.py --site-dir output/frontstage-pages/site/docs/book",
+        "examples/dev-book-welcome-wagon-smoke.py",
+        "python3 examples/dev-book-welcome-wagon-smoke.py --site-dir output/frontstage-pages/site/docs/book",
         "npm run smoke:frontstage-share-bundle",
         "npm run export:frontstage-share -- --base /loopx/ --out-dir ../../../output/frontstage-pages",
         "mkdocs build --strict --site-dir output/frontstage-pages/site/docs",
@@ -129,6 +131,7 @@ def main() -> int:
         "docs/book/mkdocs.zh.yaml",
         "docs/book/mkdocs.en.yaml",
         "examples/dev-book-publication-smoke.py",
+        "examples/dev-book-welcome-wagon-smoke.py",
     ]:
         assert_pr_and_push_trigger(trigger_text, path)
 

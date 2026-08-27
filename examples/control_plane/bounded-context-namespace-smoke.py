@@ -32,7 +32,7 @@ LEGACY_ROOT_MODULES = {
 }
 LEGACY_CAPABILITY_PACKAGES = {
     "loopx/capabilities/cross_runtime/": "loopx.control_plane.handoff.cross_runtime_impl_review",
-    "loopx/capabilities/multi_agent/": "loopx.control_plane.agents.multi_agent",
+    "loopx/capabilities/multi_agent/": "demo.multi_agent",
     "loopx/capabilities/review_batch/": "loopx.control_plane.handoff.review_batch",
 }
 CANONICAL_MODULES = {

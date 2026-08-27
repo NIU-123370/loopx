@@ -46,7 +46,6 @@ from .lark_inbox import (
 )
 from .lark_kanban import handle_lark_kanban_command, register_lark_kanban_commands
 from .ml_experiment import handle_ml_experiment_command, register_ml_experiment_commands
-from .multi_agent import handle_multi_agent_command, register_multi_agent_commands
 from .project_lifecycle import (
     handle_project_lifecycle_command,
     register_project_lifecycle_commands,
@@ -170,7 +169,6 @@ __all__ = [
     "handle_lark_inbox_command",
     "handle_lark_kanban_command",
     "handle_ml_experiment_command",
-    "handle_multi_agent_command",
     "handle_new_project_prompt_command",
     "handle_preset_command",
     "handle_presentation_command",
@@ -218,7 +216,6 @@ __all__ = [
     "register_lark_inbox_commands",
     "register_lark_kanban_commands",
     "register_ml_experiment_commands",
-    "register_multi_agent_commands",
     "register_project_lifecycle_commands",
     "register_project_commands",
     "register_pr_review_command",

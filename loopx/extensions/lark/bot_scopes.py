@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 
-
 APP_ID_PATTERN = re.compile(r"cli_[A-Za-z0-9_-]+")
 _OFFICIAL_SCOPE_APPLY_HOSTS = ("open.feishu.cn", "open.larkoffice.com")
 
@@ -31,7 +30,9 @@ CORE_BOT_SCOPES = (
 
 # 收件箱：事件订阅收群/单聊消息（敏感，需审核）
 INBOX_BOT_SCOPES = (
+    "im:message:readonly",
     "im:message.group_msg",
+    "im:message.group_msg.include_bot:read",
     "im:message.p2p_msg:readonly",
 )
 
@@ -47,7 +48,9 @@ SINK_BOT_SCOPES = (
 RECOMMENDED_BOT_SCOPES = CORE_BOT_SCOPES + INBOX_BOT_SCOPES + SINK_BOT_SCOPES
 
 
-def recommended_bot_scope_apply_url(app_id: str, host: str = "open.larkoffice.com") -> str:
+def recommended_bot_scope_apply_url(
+    app_id: str, host: str = "open.larkoffice.com"
+) -> str:
     """Return the developer-console batch scope-apply URL for one LoopX bot.
 
     Mirrors the console URL that the Lark platform returns for missing scopes so

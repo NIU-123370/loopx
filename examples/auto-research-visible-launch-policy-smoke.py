@@ -9,15 +9,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from loopx.control_plane.agents.multi_agent.visible_launch_policy import (
+from demo.multi_agent.visible_launch_policy import (
     make_visible_wake_callback,
     resolve_codex_trust_workspace,
     resolve_visible_launch_policy,
 )
-from loopx.capabilities.auto_research.demo_e2e import _load_visible_wake_into_payload
+from demo.auto_research.demo_e2e import _load_visible_wake_into_payload
 
 
-AUTO_RESEARCH_CLI = ROOT / "loopx" / "capabilities" / "auto_research" / "cli.py"
+AUTO_RESEARCH_CLI = ROOT / "demo" / "auto_research" / "cli.py"
 
 
 def ns(**values: object) -> argparse.Namespace:

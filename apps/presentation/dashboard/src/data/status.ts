@@ -215,6 +215,7 @@ export const projectAssetTodoSummarySchema = z.object({
   next: z.string().optional().nullable(),
   next_index: z.number().optional().nullable(),
   items: z.array(todoItemSchema).optional().default([]),
+  recent_completed_advancement_items: z.array(todoItemSchema).optional().default([]),
 });
 
 export const dependencyBlockerSchema = z.object({
@@ -954,6 +955,19 @@ export function withGoalActivationState(
       : payload.run_history,
   };
 }
+export function withoutGoal(payload: StatusPayload, goalId: string): StatusPayload {
+  const goals = payload.run_history.goals.filter((goal) => goal.id !== goalId);
+  const queueItems = payload.attention_queue.items.filter((item) => item.goal_id !== goalId);
+  if (goals.length === payload.run_history.goals.length && queueItems.length === payload.attention_queue.items.length) {
+    return payload;
+  }
+  return {
+    ...payload,
+    attention_queue: { ...payload.attention_queue, items: queueItems },
+    run_history: { ...payload.run_history, goals },
+  };
+}
+
 export type TodoGroup = z.infer<typeof todoGroupSchema>;
 export type TodoItem = z.infer<typeof todoItemSchema>;
 export type TodoIndexItem = z.infer<typeof todoIndexItemSchema>;

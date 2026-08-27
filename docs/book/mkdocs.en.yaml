@@ -58,6 +58,7 @@ extra:
 nav:
   - Home: index.md
   - Start:
+      - Welcome Wagon: welcome-wagon.md
       - How to use this book: chapters/00-reading-guide.md
   - Developer Course:
       - Control-Plane Course: chapters/12-control-plane-course.md

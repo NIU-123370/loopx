@@ -16,11 +16,8 @@ from ..todos.contract import (
     resolve_next_user_task_class,
     resolve_todo_continuation_policy,
 )
-from .monitor_todo import (
-    monitor_next_due_at,
-    monitor_todo_task_class,
-    parse_monitor_counter,
-)
+from ..todos.monitor_metadata import MonitorPollObservation
+from .monitor_todo import monitor_todo_task_class
 
 
 def require_monitor_successor_route(
@@ -232,47 +229,35 @@ def write_monitor_poll_todo_state(
         todo_id=resolved_todo_id,
         result_hash=safe_result_hash,
     )
-    safe_target_key = str(target_key or item.get("target_key") or "").strip()
-    effective_cadence = str(cadence or item.get("cadence") or "").strip()
-    effective_next_due_at = monitor_next_due_at(
-        generated_at=generated_at,
-        cadence=effective_cadence,
-        explicit_next_due_at=next_due_at,
-    )
-    if not material_change and not effective_next_due_at:
-        raise ValueError(
-            "unchanged monitor todo writeback requires --next-due-at or a parseable cadence such as 30m/2h/1d"
-        )
-    previous_hash = str(item.get("result_hash") or "").strip()
-    previous_no_change = parse_monitor_counter(item.get("consecutive_no_change"))
-    consecutive_no_change = (
-        0
-        if material_change or (previous_hash and previous_hash != safe_result_hash)
-        else previous_no_change + 1
-    )
-    monitor_metadata: dict[str, Any] = {
-        "last_checked_at": generated_at,
-        "result_hash": safe_result_hash,
-        "consecutive_no_change": str(consecutive_no_change),
-        "material_change": "true" if material_change else "false",
-    }
-    if safe_target_key:
-        monitor_metadata["target_key"] = safe_target_key
-    if effective_cadence:
-        monitor_metadata["cadence"] = effective_cadence
-    if effective_next_due_at:
-        monitor_metadata["next_due_at"] = effective_next_due_at
+    safe_target_key = str(target_key or "").strip()
     update_result = update_goal_todo(
         registry_path=registry_path,
         goal_id=goal_id,
         todo_id=resolved_todo_id,
         role="agent",
         reason=reason_summary,
-        monitor_metadata=monitor_metadata,
+        monitor_metadata=MonitorPollObservation(
+            generated_at=generated_at,
+            result_hash=safe_result_hash,
+            material_change=material_change,
+            target_key=safe_target_key or None,
+            cadence=cadence,
+            next_due_at=next_due_at,
+        ),
         enforce_monitor_boundedness=False,
         agent_id=agent_id,
         dry_run=not execute,
     )
+    poll_transition = update_result.get("monitor_poll_transition")
+    if not isinstance(poll_transition, dict):
+        raise RuntimeError("monitor poll Todo update returned no transition receipt")
+    material_change_generation = int(
+        poll_transition["material_change_generation"]
+    )
+    consecutive_no_change = int(poll_transition["consecutive_no_change"])
+    effective_next_due_at = poll_transition.get("next_due_at")
+    effective_cadence = str(poll_transition.get("cadence") or "")
+    safe_target_key = str(poll_transition.get("target_key") or "")
     next_results: list[dict[str, Any]] = []
     if material_change and next_agent_todo:
         next_results.append(
@@ -341,6 +326,7 @@ def write_monitor_poll_todo_state(
         "target_key": safe_target_key or None,
         "result_hash": safe_result_hash,
         "material_change": material_change,
+        "material_change_generation": material_change_generation,
         "consecutive_no_change": consecutive_no_change,
         "last_checked_at": generated_at,
         "next_due_at": effective_next_due_at,

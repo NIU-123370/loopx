@@ -237,7 +237,17 @@ def main() -> int:
         assert codex_only["summary"]["codex_prompt_dir"] is None, codex_only
         assert codex_only["summary"]["codex_skill_dir"] == str(root / "codex-only" / "skills"), codex_only
         assert codex_only["summary"]["claude_skill_dir"] is None, codex_only
-        assert codex_only["summary"]["status_counts"]["unsupported_host_surface"] == 10, codex_only
+        codex_skill_commands = {
+            item["command"]
+            for item in codex_only["installed"]
+            if item["mechanism"] == "codex_explicit_skills"
+        }
+        unsupported_native_commands = {
+            item["command"]
+            for item in codex_only["installed"]
+            if item["status"] == "unsupported_host_surface"
+        }
+        assert unsupported_native_commands == codex_skill_commands, codex_only
 
         legacy_codex_home = root / "legacy-codex"
         legacy_claude_home = root / "legacy-claude"

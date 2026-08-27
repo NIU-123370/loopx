@@ -93,6 +93,8 @@ def handle_agent_onboard_command(
 def handle_loopx_bootstrap_command_pack_command(
     args: argparse.Namespace,
     print_payload: PrintPayload,
+    *,
+    runtime_root_arg: str | None = None,
 ) -> int:
     payload = build_loopx_bootstrap_command_pack(
         project=Path(args.project),
@@ -106,6 +108,7 @@ def handle_loopx_bootstrap_command_pack_command(
         available_capabilities=args.available_capabilities,
         capability_route=args.capability_route,
         fine_grained=bool(args.fine_grained),
+        runtime_root_arg=runtime_root_arg,
     )
     if bool(getattr(args, "message_only", False)):
         print(str(payload.get("message") or ""))
@@ -176,4 +179,8 @@ def handle_starter_bootstrap_command(
     handler = handlers.get(str(getattr(args, "command", "")))
     if handler is None:
         return None
+    if handler is handle_start_goal_command:
+        return handler(args, print_payload, runtime_root_arg=args.runtime_root)
+    if handler is handle_loopx_bootstrap_command_pack_command:
+        return handler(args, print_payload, runtime_root_arg=args.runtime_root)
     return handler(args, print_payload)

@@ -176,7 +176,7 @@ todo、quota、证据与 targeted wake 同屏可见。**
 这张截图来自 LoopX 内置的 exact-KNN demo。公开 task、可编辑与受保护文件、
 deterministic CPU evaluator、dev / held-out 命令均在仓库内。可按
 [showcase walkthrough](docs/product/use-cases/auto-research/decentralized-auto-research-showcase.md)
-或 [command path](loopx/capabilities/auto_research/README.md)复现工作流；它是 demo
+或 [demo 命令路径](demo/auto_research/README.md)复现工作流；它是 demo
 结果，不是生产研究结论。
 
 ### 真实项目中的使用
@@ -418,7 +418,7 @@ Dependency Sweeper 需要明确授权、隔离 worktree、verifier、quota/cost 
 review。Auto Research 通过 proposer、executor、evaluator/promoter 协作，同时保持
 quota 和证据可见。详见
 [入门 Preset 指南](docs/product/foundations/beginner-loop-presets.md)和
-[Auto Research Command Path](loopx/capabilities/auto_research/README.md)。
+[Auto Research Demo Path](demo/auto_research/README.md)。
 
 ```bash
 loopx preset list

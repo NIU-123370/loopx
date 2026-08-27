@@ -1552,8 +1552,8 @@ LoopX 已经提供的通用机制包括：
 | Issue lifecycle | `loopx/capabilities/issue_fix/pr_lifecycle.py::build_issue_fix_pr_lifecycle_monitor_packet` | 外部 PR observation 怎样变成有限 proposal |
 | Explore result log | `loopx/capabilities/explore/result_log.py::append_explore_result_events` | finding/edge 怎样幂等保存且不获得执行权 |
 | Explore planning | `loopx/capabilities/explore/worker_branch_plan.py::build_explore_worker_branch_plan` | analysis-only 输出怎样受 scope/capacity/gate 限制 |
-| Research decision | `loopx/capabilities/auto_research/research_state.py::build_research_decision_candidates` | dev/holdout/negative evidence 怎样形成 promotion、retirement、retry |
-| Research completion | `loopx/capabilities/auto_research/research_state.py::build_auto_research_completion_status` | no runnable frontier 为什么不自动等于完成 |
+| Research decision | `demo/auto_research/research_state.py::build_research_decision_candidates` | dev/holdout/negative evidence 怎样形成 promotion、retirement、retry |
+| Research completion | `demo/auto_research/research_state.py::build_auto_research_completion_status` | no runnable frontier 为什么不自动等于完成 |
 
 ## 代表性验证
 

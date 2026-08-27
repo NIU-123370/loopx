@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, ChevronRight, Pause, Plus, RotateCcw, Settings2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Pause, Plus, RotateCcw, Settings2, Trash2 } from "lucide-react";
 
 import type { WorkspaceGoal } from "./personal-workspace-model";
 import { StatusSourceSwitcher, type StatusSourceControl } from "./status-source-switcher";
@@ -27,7 +27,7 @@ export function GoalSidebar({
   goals: WorkspaceGoal[];
   onRequestGoalCreate?: () => void;
   onOpenSettings?: () => void;
-  onRequestGoalLifecycle?: (goal: WorkspaceGoal, operation: "stop" | "resume") => void;
+  onRequestGoalLifecycle?: (goal: WorkspaceGoal, operation: "stop" | "resume" | "delete") => void;
   onSelectGoal: (goalId: string | null) => void;
   selectedGoalId: string | null;
   statusSourceControl?: StatusSourceControl;
@@ -50,15 +50,28 @@ export function GoalSidebar({
         <ChevronRight size={15} />
       </button>
       {onRequestGoalLifecycle ? (
-        <button
-          aria-label={`${stopped ? "恢复" : "停止"} ${goal.title}`}
-          className="personal-goal-lifecycle"
-          onClick={() => onRequestGoalLifecycle(goal, stopped ? "resume" : "stop")}
-          title={stopped ? "恢复 Goal" : "停止 Goal"}
-          type="button"
-        >
-          {stopped ? <RotateCcw size={13} /> : <Pause size={13} />}
-        </button>
+        <>
+          <button
+            aria-label={`${stopped ? "恢复" : "停止"} ${goal.title}`}
+            className="personal-goal-lifecycle"
+            onClick={() => onRequestGoalLifecycle(goal, stopped ? "resume" : "stop")}
+            title={stopped ? "恢复 Goal" : "停止 Goal"}
+            type="button"
+          >
+            {stopped ? <RotateCcw size={13} /> : <Pause size={13} />}
+          </button>
+          {stopped ? (
+            <button
+              aria-label={`删除 ${goal.title}`}
+              className="personal-goal-lifecycle personal-goal-delete"
+              onClick={() => onRequestGoalLifecycle(goal, "delete")}
+              title="删除 Goal"
+              type="button"
+            >
+              <Trash2 size={13} />
+            </button>
+          ) : null}
+        </>
       ) : null}
     </div>
   );

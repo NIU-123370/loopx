@@ -273,14 +273,17 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): 
       run: {
         agentId: goal.agentId,
         agentLabel: goal.agentLabel ?? goal.agentId,
-        completedSteps: goal.agentTodos.filter((todo) => todo.done).length,
+        completedSteps: goal.doneTodoCount ?? goal.agentTodos.filter((todo) => todo.done).length,
         goalId: goal.goalId,
         goalTitle: goal.title,
         latestActivity: goal.agentSentence,
         runId: `goal:${goal.goalId}`,
         status: "running",
         title: goal.nextSentence,
-        totalSteps: goal.agentTodos.length || 1,
+        totalSteps: Math.max(
+          (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,
+          1,
+        ),
       },
     }));
     return items;
@@ -306,14 +309,17 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null): 
     run: {
       agentId: goal.agentId,
       agentLabel: goal.agentLabel ?? goal.agentId,
-      completedSteps: goal.agentTodos.filter((todo) => todo.done).length,
+      completedSteps: goal.doneTodoCount ?? goal.agentTodos.filter((todo) => todo.done).length,
       goalId: goal.goalId,
       goalTitle: goal.title,
       latestActivity: goal.agentSentence,
       runId: `goal:${goal.goalId}`,
       status: goal.state === "推进中" ? "running" : goal.state === "需修复" ? "failed" : "waiting",
       title: goal.nextSentence,
-      totalSteps: goal.agentTodos.length || 1,
+      totalSteps: Math.max(
+        (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,
+        1,
+      ),
     },
   });
   goal.agentTodos.filter((todo) => todo.taskClass === "continuous_monitor").forEach((todo) => {
@@ -414,24 +420,54 @@ function proposalFields(parameters: Record<string, unknown>) {
     }));
 }
 
-function workspaceProposal(proposal: TypedActionProposal): WorkspaceActionPreview {
-  const lifecycleOperation = proposal.action_kind === "goal.lifecycle"
-    && (proposal.normalized_parameters.operation === "stop" || proposal.normalized_parameters.operation === "resume")
-    ? proposal.normalized_parameters.operation
+type GoalLifecycleOperation = "stop" | "resume" | "delete";
+
+function lifecycleOperationFor(proposal: TypedActionProposal): GoalLifecycleOperation | undefined {
+  if (proposal.action_kind !== "goal.lifecycle") return undefined;
+  const operation = proposal.normalized_parameters.operation;
+  return operation === "stop" || operation === "resume" || operation === "delete"
+    ? operation
     : undefined;
+}
+
+function proposalImpact(proposal: TypedActionProposal, lifecycleOperation?: GoalLifecycleOperation): string {
+  if (proposal.action_kind === "goal.create") {
+    return "确认后会创建 Goal 和首个 Todo，并让选定 Agent 开始首轮推进。";
+  }
+  if (proposal.action_kind === "goal.lifecycle") {
+    if (lifecycleOperation === "stop") {
+      return "确认后会停止自动推进，并将 Goal 移入折叠的「已停止」列表；历史、Todo 和证据都会保留，可随时恢复。";
+    }
+    if (lifecycleOperation === "delete") {
+      return "确认后会从 source registry 和 global registry 移除这个已停止 Goal；项目文件、历史状态文件和备份不会被删除。";
+    }
+    return "确认后会恢复 Goal 的自动调度资格并移回 Active Goals；实际执行仍受 quota、Gate 和 Todo 约束。";
+  }
+  return proposal.permission_classification === "protected"
+    ? "该操作需要通过受保护的 LoopX 写入服务完成。"
+    : "确认后会调用规范 LoopX 服务写入状态。";
+}
+
+function proposalPrimaryLabel(proposal: TypedActionProposal, lifecycleOperation?: GoalLifecycleOperation): string {
+  if (proposal.action_kind === "goal.create") return "创建 Goal 并开始首轮";
+  if (proposal.action_kind === "goal.lifecycle") {
+    if (lifecycleOperation === "stop") return "停止 Goal";
+    if (lifecycleOperation === "delete") return "删除 Goal";
+    return "恢复 Goal";
+  }
+  if (proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true) {
+    return "创建任务并开始执行";
+  }
+  return "确认并应用";
+}
+
+function workspaceProposal(proposal: TypedActionProposal): WorkspaceActionPreview {
+  const lifecycleOperation = lifecycleOperationFor(proposal);
   return {
     actionKind: proposal.action_kind,
     fields: proposalFields(proposal.normalized_parameters),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
-    impact: proposal.action_kind === "goal.create"
-      ? "确认后会创建 Goal 和首个 Todo，并让选定 Agent 开始首轮推进。"
-      : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
-        ? "确认后会停止自动推进，并将 Goal 移入折叠的「已停止」列表；历史、Todo 和证据都会保留，可随时恢复。"
-        : proposal.action_kind === "goal.lifecycle"
-          ? "确认后会恢复 Goal 的自动调度资格并移回 Active Goals；实际执行仍受 quota、Gate 和 Todo 约束。"
-      : proposal.permission_classification === "protected"
-      ? "该操作需要通过受保护的 LoopX 写入服务完成。"
-      : "确认后会调用规范 LoopX 服务写入状态。",
+    impact: proposalImpact(proposal, lifecycleOperation),
     previewId: proposal.proposal_id,
     lifecycleOperation,
     gate: proposal.gate ? {
@@ -439,14 +475,7 @@ function workspaceProposal(proposal: TypedActionProposal): WorkspaceActionPrevie
       nextAction: typeof proposal.gate.next_action === "string" ? proposal.gate.next_action : undefined,
       summary: String(proposal.gate.summary ?? "需要宿主确认"),
     } : undefined,
-    primaryLabel: proposal.action_kind === "goal.create" ? "创建 Goal 并开始首轮"
-      : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
-        ? "停止 Goal"
-        : proposal.action_kind === "goal.lifecycle"
-          ? "恢复 Goal"
-      : proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true
-        ? "创建任务并开始执行"
-        : "确认并应用",
+    primaryLabel: proposalPrimaryLabel(proposal, lifecycleOperation),
     status: proposalStatus(proposal.status),
     title: proposal.summary,
   };
@@ -939,18 +968,32 @@ export function PersonalWorkspacePage({
     window.requestAnimationFrame(() => composerRef.current?.focus());
   }
 
-  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: "stop" | "resume") {
-    await createPreview({
-      actionKind: "goal.lifecycle",
-      context: { kind: "goal_directory", goal_id: goal.goalId },
-      idempotencyKey: `workspace-goal-${operation}-${goal.goalId}-${Date.now().toString(36)}`,
-      normalizedParameters: {
-        goal_id: goal.goalId,
-        operation,
-        reason: operation === "stop" ? "Stopped from the owner workspace" : "Resumed from the owner workspace",
-      },
-      summary: operation === "stop" ? `停止 Goal：${goal.title}` : `恢复 Goal：${goal.title}`,
-    });
+  async function requestGoalLifecycle(goal: WorkspaceGoal, operation: GoalLifecycleOperation) {
+    const reasonByOperation: Record<GoalLifecycleOperation, string> = {
+      delete: "Deleted from the owner workspace",
+      resume: "Resumed from the owner workspace",
+      stop: "Stopped from the owner workspace",
+    };
+    const summaryByOperation: Record<GoalLifecycleOperation, string> = {
+      delete: `删除 Goal：${goal.title}`,
+      resume: `恢复 Goal：${goal.title}`,
+      stop: `停止 Goal：${goal.title}`,
+    };
+    try {
+      await createPreview({
+        actionKind: "goal.lifecycle",
+        context: { kind: "goal_directory", goal_id: goal.goalId },
+        idempotencyKey: `workspace-goal-${operation}-${goal.goalId}-${Date.now().toString(36)}`,
+        normalizedParameters: {
+          goal_id: goal.goalId,
+          operation,
+          reason: reasonByOperation[operation],
+        },
+        summary: summaryByOperation[operation],
+      });
+    } catch (error) {
+      setActionFeedback(`操作失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   function prepareScheduleDraft(kind: "heartbeat" | "monitor", goalId: string | null) {
@@ -1029,7 +1072,7 @@ export function PersonalWorkspacePage({
     onApplyProposal: async (proposal) => {
       const lifecycleChange = proposal.actionKind === "goal.lifecycle"
         && proposal.goalId
-        && proposal.lifecycleOperation
+        && (proposal.lifecycleOperation === "stop" || proposal.lifecycleOperation === "resume")
         ? {
             goalId: proposal.goalId,
             next: proposal.lifecycleOperation === "stop" ? "stopped" as const : "active" as const,
@@ -1051,7 +1094,12 @@ export function PersonalWorkspacePage({
           setSelection({ item: applied, kind: "proposal" });
           setActionFeedback(`已完成：${proposal.title}`);
           if (proposal.actionKind === "goal.lifecycle") {
-            if (proposal.lifecycleOperation === "stop") selectGoal(null);
+            if (proposal.lifecycleOperation === "stop" || proposal.lifecycleOperation === "delete") {
+              selectGoal(null);
+            }
+            if (proposal.lifecycleOperation === "delete" && proposal.goalId) {
+              callbacks.onGoalDeleted?.(proposal.goalId);
+            }
             const reconcile = callbacks.onReconcileStatus ?? callbacks.onRefresh;
             void Promise.resolve().then(() => reconcile?.()).catch(() => undefined);
           }
@@ -1061,14 +1109,28 @@ export function PersonalWorkspacePage({
         const applied = workspaceProposal(result.proposal);
         setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
         setSelection({ item: applied, kind: "proposal" });
+        if (result.proposal.status !== "applied" || result.proposal.receipt?.projection_verified !== true) {
+          if (lifecycleChange) {
+            callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
+          }
+          setActionFeedback(
+            result.proposal.status === "stale"
+              ? "状态已变化，操作未执行，请重新生成确认预览。"
+              : `操作未完成：${result.proposal.status}`,
+          );
+          return;
+        }
         setActionFeedback(`已完成：${applied.title}`);
         // Keep the success receipt visible. Refresh and navigation happen when
         // the user chooses the explicit "进入 Goal" action in the drawer.
         if (applied.actionKind === "todo.create") {
           await callbacks.onRefresh?.();
         }
-        if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "stop") {
+        if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "stop" || applied.lifecycleOperation === "delete")) {
           selectGoal(null);
+        }
+        if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
+          callbacks.onGoalDeleted?.(applied.goalId);
         }
         if (applied.actionKind === "goal.lifecycle") {
           const reconcile = callbacks.onReconcileStatus ?? callbacks.onRefresh;

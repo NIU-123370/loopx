@@ -16,6 +16,7 @@ import {
   formatStatusError,
   parseStatusPayload,
   withGoalActivationState,
+  withoutGoal,
 } from "../data/status";
 import {
   ChatApiError,
@@ -433,6 +434,7 @@ type PersonalGoalItem = {
   agentId: string;
   agentSentence: string;
   agentTodos: PersonalAgentTodoItem[];
+  doneTodoCount: number;
   goalId: string;
   latestActivity?: string;
   needsYou?: string | null;
@@ -702,8 +704,8 @@ function personalTodoText(todo: TodoItem) {
   return compactShareText(todo.title ?? todo.text, 112);
 }
 
-function personalAgentTodos(row: GoalDirectoryRow): PersonalAgentTodoItem[] {
-  return (getShareTodos(row, "agent")?.items ?? []).map((todo) => ({
+function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): PersonalAgentTodoItem {
+  return {
     claimedBy: todo.claimed_by ?? null,
     done: todo.done,
     evidence: todo.evidence ? compactShareText(todo.evidence, 96) : null,
@@ -713,7 +715,42 @@ function personalAgentTodos(row: GoalDirectoryRow): PersonalAgentTodoItem[] {
     taskClass: todo.task_class ?? null,
     text: personalTodoText(todo),
     todoId: todo.todo_id?.trim() || `${row.goal.id}:agent:${todo.index}`,
-  }));
+  };
+}
+
+function personalAgentTodos(row: GoalDirectoryRow): PersonalAgentTodoItem[] {
+  return (getShareTodos(row, "agent")?.items ?? []).map((todo) => personalAgentTodoFromItem(todo, row));
+}
+
+/**
+ * Projected completion facts for a Goal. The status payload reports completed
+ * Todos as a count (project_asset.agent_todos.done) plus a bounded
+ * recent-completed lane; the items list itself only carries open Todos.
+ */
+function personalAgentTodoFacts(row: GoalDirectoryRow): {
+  doneTodoCount: number;
+  nextTodoText: string | null;
+  recentCompleted: PersonalAgentTodoItem[];
+} {
+  const assetTodos = row.queueItem?.project_asset?.agent_todos;
+  const queueTodos = row.queueItem?.agent_todos;
+  const items = assetTodos?.items?.length ? assetTodos.items : queueTodos?.items ?? [];
+  const doneFromCount = assetTodos?.done ?? queueTodos?.done_count ?? null;
+  const doneFromItems = items.filter((todo) => todo.done).length;
+  const doneTodoCount = Math.max(doneFromCount ?? 0, doneFromItems);
+  const seenTodoIds = new Set(
+    items
+      .map((todo) => todo.todo_id?.trim())
+      .filter((value): value is string => Boolean(value)),
+  );
+  const recentCompleted = (assetTodos?.recent_completed_advancement_items ?? [])
+    .filter((todo) => !todo.todo_id?.trim() || !seenTodoIds.has(todo.todo_id.trim()))
+    .map((todo) => personalAgentTodoFromItem(todo, row));
+  const firstOpen = items.find((todo) => !todo.done);
+  const nextTodoText = cleanShareText(assetTodos?.next ?? "")
+    || (firstOpen ? cleanShareText(firstOpen.title ?? "") || cleanShareText(firstOpen.text ?? "") : "")
+    || null;
+  return { doneTodoCount, nextTodoText, recentCompleted };
 }
 
 function personalValidationSentence(value: string | null | undefined) {
@@ -1080,6 +1117,7 @@ function buildPersonalHomeModel(payload: StatusPayload, rows: GoalDirectoryRow[]
     const needsYouTodo = allUserTodos.find((todo) => todo.goalId === goal.id);
     const needsYou = needsYouTodo?.text ?? null;
     const goalAgentTodos = personalAgentTodos(row);
+    const agentTodoFacts = personalAgentTodoFacts(row);
     const goalAgentRows = agentRows.filter(
       (agent) => agent.goalIds.includes(goal.id) && !/unassigned|unknown/i.test(agent.agentId),
     );
@@ -1091,6 +1129,7 @@ function buildPersonalHomeModel(payload: StatusPayload, rows: GoalDirectoryRow[]
       goalAgentRows.find((agent) => /codex/i.test(agent.agentId)) ??
       goalAgentRows[0];
     const nextSentence = [
+      agentTodoFacts.nextTodoText,
       row.queueItem?.recommended_action,
       row.latestRun?.recommended_action,
       personalAgentSentence(payload, row, state),
@@ -1100,7 +1139,8 @@ function buildPersonalHomeModel(payload: StatusPayload, rows: GoalDirectoryRow[]
       activationState: goal.activation_state,
       agentId: agentRow?.agentId ?? "codex",
       agentSentence: personalAgentSentence(payload, row, state),
-      agentTodos: goalAgentTodos,
+      agentTodos: [...goalAgentTodos, ...agentTodoFacts.recentCompleted],
+      doneTodoCount: agentTodoFacts.doneTodoCount,
       goalId: goal.id,
       latestActivity: row.latestRun?.generated_at ?? "",
       needsYou,
@@ -1188,6 +1228,7 @@ function buildPersonalHomeModel(payload: StatusPayload, rows: GoalDirectoryRow[]
 function PersonalGoalHome({
   isLoading,
   onGoalActivationStateChange,
+  onGoalDeleted,
   onSelectGoal,
   onReconcileStatus,
   onRefresh,
@@ -1200,6 +1241,7 @@ function PersonalGoalHome({
 }: {
   isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
+  onGoalDeleted: (goalId: string) => void;
   onSelectGoal: (goalId: string) => void;
   onReconcileStatus: () => void | Promise<void>;
   onRefresh: () => void | Promise<void>;
@@ -2370,6 +2412,7 @@ function PersonalGoalHome({
           },
           onOpenOutput: (output) => openGoalChat(output.goalId),
           onGoalActivationStateChange,
+          onGoalDeleted,
           onReconcileStatus,
           onExportOutput: async (output) => {
             const contents = [
@@ -2754,6 +2797,10 @@ export function DashboardPage() {
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;
         setPayload((current) => withGoalActivationState(current, goalId, activationState));
+      }}
+      onGoalDeleted={(goalId) => {
+        statusRequestFenceRef.current.projectionRevision += 1;
+        setPayload((current) => withoutGoal(current, goalId));
       }}
       onSelectGoal={selectGoal}
       onReconcileStatus={() => loadFromUrl(

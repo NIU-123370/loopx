@@ -22,19 +22,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.worker_runtime import (
+from demo.auto_research.worker_runtime import (
     run_auto_research_worker_turn,
     load_auto_research_worker_frontier,
     AUTO_RESEARCH_WORKER_TURN_SCHEMA_VERSION,
 )
-from loopx.capabilities.auto_research.worker_loop import (
+from demo.auto_research.worker_loop import (
     run_auto_research_worker_loop,
 )
-from loopx.capabilities.auto_research.rollout_append import (
+from demo.auto_research.rollout_append import (
     append_auto_research_rollout_events,
 )
-from loopx.capabilities.auto_research.demo_e2e import _seed_visible_demo_control_plane
-from loopx.capabilities.auto_research.demo_supervisor import (
+from demo.auto_research.demo_e2e import _seed_visible_demo_control_plane
+from demo.auto_research.demo_supervisor import (
     build_auto_research_demo_supervisor_plan,
 )
 

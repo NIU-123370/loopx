@@ -159,7 +159,7 @@ The contract command previews the research brief, evidence boundary, and next
 launch packet. The `start --execute` command opens visible Codex CLI lanes
 through the generic multi-agent kernel; lane-authored evidence still has to be
 written back through LoopX state before the demo can claim progress. See the
-[auto-research command path](../../loopx/capabilities/auto_research/README.md).
+[auto-research command path](../../demo/auto_research/README.md).
 
 ### Review Agent Work
 

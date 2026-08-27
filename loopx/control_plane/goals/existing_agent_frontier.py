@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ...project_prompt import shell_arg
+from ...project_prompt import render_cli_command_prefix, shell_arg
 from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.contract import (
     TODO_STATUS_BLOCKED,
@@ -61,7 +61,8 @@ def build_goal_todo_frontier_steps(
         else "--claimed-by <agent-id> "
     )
     add_new_command_template = (
-        f"{shell_arg(cli_bin)} todo add --goal-id "
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_pack.get('command_runtime_root'))} "
+        f"todo add --goal-id "
         f"{shell_arg(str(command_pack.get('goal_id') or ''))} "
         "--project . --role agent "
         f"{claimed_by}"

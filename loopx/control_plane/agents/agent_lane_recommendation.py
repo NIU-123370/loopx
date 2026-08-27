@@ -17,6 +17,7 @@ from ..work_items.primary_action import protocol_action_text
 from ..work_items.work_lane import (
     work_lane_contract_is_due_monitor_attempt,
     work_lane_contract_is_lark_inbox_reply_due,
+    work_lane_contract_is_operator_inbox_material_review_due,
 )
 from .agent_scope import (
     _todo_item_is_actionable_open,
@@ -420,7 +421,11 @@ def selected_recommended_action_from_work_lane(
         if isinstance(work_lane_contract, dict):
             return work_lane_contract.get("action")
         return None
-    if work_lane_contract_is_lark_inbox_reply_due(work_lane_contract):
+    if work_lane_contract_is_lark_inbox_reply_due(
+        work_lane_contract
+    ) or work_lane_contract_is_operator_inbox_material_review_due(
+        work_lane_contract
+    ):
         return work_lane_contract.get("action") or raw_action
     if work_lane_contract_is_due_monitor_attempt(work_lane_contract):
         due_items = (

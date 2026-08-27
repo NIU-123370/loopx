@@ -79,8 +79,15 @@ def _loopx_start_goal_arguments_instruction(
 ) -> str:
     selected_host = host_surface or "<exact-current-host>"
     instruction = (
-        "If arguments are present, pass the complete visible command arguments "
-        "unchanged as one value to "
+        "If arguments are present and the current host already has a verified "
+        "active LoopX Goal/Agent binding, preserve that exact identity when the "
+        "request continues, corrects, or refines the registered objective. Do "
+        "not call `start-goal` for an ordinary phase, issue, PR, or Todo inside "
+        "that Goal; follow its exact current `interaction_contract` or quota "
+        "command first, then record the request through the typed Todo/writeback "
+        "path for the bound agent. Start another Goal only for a materially "
+        "different objective or an explicit new-Goal request. Otherwise pass "
+        "the complete visible command arguments unchanged as one value to "
         f'`{cli_bin} start-goal --guided --project . --slash-command-arguments='
         f'"<complete visible $ARGUMENTS>" --host-surface {selected_host}`. '
         "The CLI, not the model, owns parsing supported leading switches and "

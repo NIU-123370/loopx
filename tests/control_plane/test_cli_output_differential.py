@@ -15,6 +15,8 @@ from loopx.control_plane.testing.cli_output_differential import (
 from loopx.control_plane.testing.cli_output_semantics import (
     action_portfolio_schema_versions,
     action_signature_coverages,
+    planning_horizon_schema_versions,
+    planning_inventory_detail_schema_versions,
 )
 
 
@@ -37,6 +39,8 @@ def _row(**overrides: object) -> dict[str, object]:
         "action_signature_sha256": "semantic-signature",
         "action_signature_coverages": ["turn_envelope_action_dimensions_v0"],
         "action_portfolio_schema_versions": [],
+        "planning_horizon_schema_versions": [],
+        "planning_inventory_detail_schema_versions": [],
     }
     row.update(overrides)
     return row
@@ -117,6 +121,30 @@ def test_measurement_records_semantic_shape_without_runtime_hash_noise() -> None
             },
         }
     ) == ["quota_action_portfolio_v0"]
+    assert planning_horizon_schema_versions(
+        {
+            "planning_horizon": {
+                "schema_version": "quota_planning_horizon_v0"
+            },
+            "nested": {
+                "planning_horizon": {
+                    "schema_version": "quota_planning_horizon_v0"
+                }
+            },
+        }
+    ) == ["quota_planning_horizon_v0"]
+    assert planning_inventory_detail_schema_versions(
+        {
+            "agent_todo_planning_inventory": {
+                "schema_version": "todo_planning_inventory_detail_v0"
+            },
+            "nested": {
+                "agent_todo_planning_inventory": {
+                    "schema_version": "todo_planning_inventory_detail_v0"
+                }
+            },
+        }
+    ) == ["todo_planning_inventory_detail_v0"]
 
     with_observability_field = json.loads(payload("third-runtime", "third-source"))
     with_observability_field["action_signature"]["diagnostic_note"] = "new"
@@ -213,10 +241,10 @@ def test_action_portfolio_coverage_migration_requires_review() -> None:
     assert result["ok"] is True
     assert result["review_required"] is True
     assert result["rows"][0]["allowances"] == {
-        "chars": 1_280,
-        "utf8_bytes": 1_280,
-        "lines": 36,
-        "compact_payload_chars": 896,
+        "chars": 1_600,
+        "utf8_bytes": 1_600,
+        "lines": 42,
+        "compact_payload_chars": 1_280,
     }
     assert result["rows"][0]["review_signals"] == [
         "action_signature coverage migrated: "
@@ -228,13 +256,13 @@ def test_action_portfolio_migration_still_fails_above_bounded_growth() -> None:
     candidate = _row(
         action_signature_sha256="oversized-portfolio-semantic-signature",
         action_signature_coverages=["turn_envelope_action_dimensions_v2"],
-        chars=41_281,
+        chars=41_601,
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
 
     assert result["ok"] is False
-    assert "chars grew by 1281; allowance is 1280" in (
+    assert "chars grew by 1601; allowance is 1600" in (
         result["rows"][0]["failures"]
     )
 
@@ -281,9 +309,28 @@ def test_quota_action_portfolio_v1_schema_migration_is_declared() -> None:
     ]
 
 
-def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
+def test_quota_action_portfolio_v2_context_migration_is_declared() -> None:
     candidate = _row(
         action_portfolio_schema_versions=["quota_action_portfolio_v2"],
+        compact_payload_chars=21_280,
+    )
+    base = _row(
+        action_portfolio_schema_versions=["quota_action_portfolio_v1"],
+    )
+
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+
+    assert result["ok"] is True
+    assert result["review_required"] is True
+    assert result["rows"][0]["review_signals"] == [
+        "action_portfolio schema migrated: quota_action_portfolio_v1 -> "
+        "quota_action_portfolio_v2"
+    ]
+
+
+def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
+    candidate = _row(
+        action_portfolio_schema_versions=["quota_action_portfolio_v3"],
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
@@ -297,7 +344,7 @@ def test_unknown_action_portfolio_schema_migration_fails_closed() -> None:
 def test_unknown_action_signature_coverage_migration_fails_closed() -> None:
     candidate = _row(
         action_signature_sha256="unknown-semantic-signature",
-        action_signature_coverages=["turn_envelope_action_dimensions_v3"],
+        action_signature_coverages=["turn_envelope_action_dimensions_v4"],
     )
 
     result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
@@ -305,6 +352,109 @@ def test_unknown_action_signature_coverage_migration_fails_closed() -> None:
     assert result["ok"] is False
     assert result["rows"][0]["failures"] == [
         "action_signature semantic digest changed"
+    ]
+
+
+def test_planning_horizon_v0_migration_has_one_bounded_growth_budget() -> None:
+    candidate = _row(
+        action_signature_sha256="planning-horizon-semantic-signature",
+        action_signature_coverages=["turn_envelope_action_dimensions_v3"],
+        planning_horizon_schema_versions=["quota_planning_horizon_v0"],
+        chars=43_200,
+        utf8_bytes=43_200,
+        lines=1_084,
+        compact_payload_chars=22_800,
+    )
+
+    result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
+
+    assert result["ok"] is True
+    assert result["review_required"] is True
+    assert result["rows"][0]["review_signals"] == [
+        "action_signature coverage migrated: "
+        "turn_envelope_action_dimensions_v0 -> turn_envelope_action_dimensions_v3",
+        "planning_horizon schema migrated: none -> quota_planning_horizon_v0",
+    ]
+
+
+def test_planning_horizon_v0_migration_fails_above_its_bounded_growth() -> None:
+    candidate = _row(
+        action_signature_sha256="oversized-planning-horizon-signature",
+        action_signature_coverages=["turn_envelope_action_dimensions_v3"],
+        planning_horizon_schema_versions=["quota_planning_horizon_v0"],
+        chars=43_201,
+    )
+
+    result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
+
+    assert result["ok"] is False
+    assert "chars grew by 3201; allowance is 3200" in (
+        result["rows"][0]["failures"]
+    )
+
+
+def test_unknown_planning_horizon_schema_migration_fails_closed() -> None:
+    candidate = _row(
+        planning_horizon_schema_versions=["quota_planning_horizon_v1"],
+    )
+
+    result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
+
+    assert result["ok"] is False
+    assert result["rows"][0]["failures"] == [
+        "planning_horizon schema coverage changed"
+    ]
+
+
+def test_planning_inventory_detail_v0_has_one_bounded_growth_budget() -> None:
+    candidate = _row(
+        planning_inventory_detail_schema_versions=[
+            "todo_planning_inventory_detail_v0"
+        ],
+        chars=41_280,
+        utf8_bytes=41_280,
+        lines=1_036,
+        compact_payload_chars=21_024,
+    )
+
+    result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
+
+    assert result["ok"] is True
+    assert result["review_required"] is True
+    assert result["rows"][0]["review_signals"] == [
+        "planning inventory detail schema migrated: "
+        "none -> todo_planning_inventory_detail_v0"
+    ]
+
+
+def test_planning_inventory_detail_migration_is_bounded_and_fail_closed() -> None:
+    oversized = _row(
+        planning_inventory_detail_schema_versions=[
+            "todo_planning_inventory_detail_v0"
+        ],
+        chars=41_281,
+    )
+    unknown = _row(
+        planning_inventory_detail_schema_versions=[
+            "todo_planning_inventory_detail_v1"
+        ]
+    )
+
+    oversized_result = compare_cli_output_receipts(
+        _receipt(_row()),
+        _receipt(oversized),
+    )
+    unknown_result = compare_cli_output_receipts(
+        _receipt(_row()),
+        _receipt(unknown),
+    )
+
+    assert oversized_result["ok"] is False
+    assert "chars grew by 1281; allowance is 1280" in (
+        oversized_result["rows"][0]["failures"]
+    )
+    assert unknown_result["rows"][0]["failures"] == [
+        "planning inventory detail schema coverage changed"
     ]
 
 

@@ -322,7 +322,7 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 外部开发者不应从本地 maintainer state 猜工作。公开入口是：
 
 1. 阅读
-   [`CONTRIBUTOR_TASKS.md`](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)；
+   [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)；
 2. 选择 `Starter`、`Focused` 或已达成设计共识的任务；
 3. 阅读任务涉及的协议和 validation；
 4. 在关联 Issue 中声明准备处理的最小切片；
@@ -334,7 +334,7 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 - `.loopx/`、`.codex/goals/` 或 live active state；
 - private benchmark trace、raw agent session 或 verifier output；
 - 内部文档、生产凭据、本机路径；
-- maintainer-owned live run 的推测性复刻。
+- `Maintainer-owned` live run 的推测性复刻。
 
 公开贡献需要从 public-safe protocol、Issue 和 fixture 建立上下文。
 
@@ -348,6 +348,71 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 
 无论交付类型是什么，都要说明它改变了哪个读者结果、由哪个 authority 保持事实，以及什么事件会
 使文档、fixture 或 compatibility claim 过期。
+
+### 社区信号怎样变成有边界的工作
+
+本节与英文对应章节保持语义镜像；案例、状态、结论或链接目标的实质差异属于文档缺陷。
+
+<!-- community-casebook:signal-to-bounded-work:start -->
+<!-- community-casebook:question-before-fix -->
+
+**问题也可以是贡献。** 在
+[“怎么给任务设置停止点？”](https://github.com/huangruiteng/loopx/discussions/3069)
+中，用户报告的是“任务完成后仍空转”。在确认它属于产品缺陷前，社区先把问题拆成 Goal
+acceptance、terminal closure、quota budget 与 monitor cadence 四个可检查假设。好的 Q&A
+不是立刻猜一处代码，而是把模糊体验变成最小诊断路径。
+
+<!-- community-casebook:user-idea-to-contract -->
+
+**方法论建议先映射已有合同。**
+[“look back and retain”](https://github.com/huangruiteng/loopx/issues/2353)
+从用户长期使用经验出发，提出 Agent 应解释路线为什么改变、哪些旧工作仍有效。讨论没有直接创建
+第二套 memory 系统，而是先对照 evidence log、Vision acceptance 与 `goal_path_delta_v0`，再确认
+剩余语义缺口。这类 Issue 可以在不写代码的情况下改进产品方向。
+
+<!-- community-casebook:claim-before-code -->
+
+**认领要先收窄 authority。**
+[Pi `task_lease_v0` 任务](https://github.com/huangruiteng/loopx/issues/3549)
+把 existing capability owner、Host facade、in-scope、non-goals、目标 base branch 与验证命令写在
+实现之前。它没有把“Pi 需要 lease 操作”扩张成新的 scheduler、存储或自动 lease lifecycle。
+
+这些记录只是学习样本，不是当前任务状态的副本。准备参与时仍要重新打开 Issue，确认它尚未被
+关闭、改向或认领，并以
+[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+为当前公开入口；`Maintainer-owned` 工作只能请求独立 helper slice，不能平行复刻。
+<!-- community-casebook:signal-to-bounded-work:end -->
+
+### RFC Review Lab：先判状态，再谈实现
+
+本节与英文对应章节保持语义镜像。
+
+<!-- community-casebook:rfc-review-lab:start -->
+<!-- community-casebook:rfc-status -->
+
+先从 [RFC Index](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/README.md)
+读取正式状态。`Accepted`、`Active research`、`Draft` 与 `Draft integration proposal` 允许的动作
+不同；一份 RFC 或 Discussion 存在，不等于某个实现已经发布，也不自动生成可认领任务。
+
+<!-- community-casebook:rfc-community-proposal -->
+
+例如社区 Discussion
+[#3157](https://github.com/huangruiteng/loopx/discussions/3157)
+提出 event-driven control plane 与统一 policy decision。评审时不要从“目录是否漂亮”开始，应先问：
+
+1. 当前 quota、scheduler、event store 与 worker 的 canonical authority / owner 分别是谁？
+2. 提案是在组合现有规则，还是复制第二套 decision authority？
+3. event store 是否被误当成具备 delivery semantics 的 event bus？
+4. 哪一阶段第一次改变默认行为，是否有独立 migration gate？
+5. 最小可验证切片是什么，失败后如何回到当前路径？
+
+<!-- community-casebook:rfc-output -->
+
+一份有用的 RFC review 应输出 `accept`、`revise`、`require_evidence` 或 `defer` 之类的明确
+disposition，并指出 owner、下一产物与复核条件。需要跨方向同步讨论时，可以进入
+[Open Strategy Review](https://github.com/huangruiteng/loopx/blob/main/docs/community/open-strategy-reviews.md)；
+会议不会替代版本化 RFC、bounded Issue、PR review 或 maintainer authority。
+<!-- community-casebook:rfc-review-lab:end -->
 
 ## 判断改动是否过大
 

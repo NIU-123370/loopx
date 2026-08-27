@@ -1107,8 +1107,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             "demo e2e",
             "frontier",
             "visible launcher",
-            "loopx/capabilities/auto_research",
-            "loopx/cli_commands/auto_research",
+            "demo/auto_research",
         ),
         "checks": [
             {

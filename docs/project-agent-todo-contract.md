@@ -263,6 +263,13 @@ Deferred todos may carry a machine-readable resume condition with
   that binding, it keeps the todo deferred and exposes a machine-readable
   repository ambiguity instead of matching the same PR number in another
   repository.
+- `resume_when=capacity_available:<capability>`: the todo becomes ready only
+  when the current quota read supplies that runtime capability.
+- `resume_when=monitor_changed:<monitor_todo_id>`: an open advancement todo
+  resumes only after the referenced `continuous_monitor` records a new typed
+  material-change generation. The transition binds the monitor's current
+  generation as a baseline, so unchanged polls, note edits, and replay of the
+  same material result do not wake the todo.
 
 Open todos may also carry `resume_when` when they are visible but not yet
 executable. Until the parsed `resume_condition.satisfied` value is true, status
@@ -607,6 +614,26 @@ loopx todo update \
   --resume-when todo_done:<blocking_todo_id> \
   --reason "<public-safe deferred rationale>"
 ```
+
+When an open advancement slice is waiting for a monitor observation, keep it
+visible and atomically bind both the wait and an independent runnable
+successor:
+
+```bash
+loopx todo update \
+  --goal-id <goal-id> \
+  --todo-id <waiting_todo_id> \
+  --agent-id <registered-agent> \
+  --resume-when monitor_changed:<monitor_todo_id> \
+  --successor-todo-id <runnable_successor_todo_id> \
+  --reason "<public-safe external-wait rationale>"
+```
+
+LoopX preserves the waiting todo as `status=open`, excludes it from runnable
+candidates while `resume_ready=false`, and automatically restores it to the
+runnable lane after the monitor generation advances. Clear a satisfied
+condition with `todo update --clear-resume-when` before deliberately re-arming
+the same monitor wait.
 
 Use `todo supersede` when the current open todo should be retired and replaced:
 

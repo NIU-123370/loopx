@@ -172,6 +172,71 @@ auth，CPA 与 Codex provider 必须同时配置同一个由 secret store 注入
 可以先证明一条有限、可解释的路由链，避免同一 credential 被重复尝试。需要额外 round
 时必须单独增加参数并重跑提交边界测试。
 
+### 从 qualification 基线切到长期运行配置
+
+`0 / 0 / 0` 用来证明路由语义，不是网络不稳定环境的长期运行建议。当前 self-use 在完整
+compatibility matrix 通过后使用下面的高韧性 profile：
+
+```yaml
+# CPA：上游 credential / provider 重试层
+request-retry: 10
+max-retry-credentials: 0
+max-retry-interval: 0
+```
+
+```toml
+# Codex App：外层 request / stream 恢复上限
+request_max_retries = 30
+stream_max_retries = 30
+```
+
+这些数字是当前故障分布下的**上限**，不是所有部署都应照抄的通用默认值。`10` 表示首轮
+credential 遍历之后最多允许十个附加 round；`max-retry-credentials: 0` 表示每轮不再
+人为截断 eligible credential；`max-retry-interval: 0` 表示 CPA 不等待 cooldown 后再开
+下一轮。App 的 `30 / 30` 是 CPA 之外的最后恢复余量，不代表每个 provider 都固定调用
+三十次。任何一层都必须服从请求取消、提交边界和端到端 wall-clock budget。
+
+把重试分层，不能只把三个数字相乘：
+
+| 层 | 主要职责 | 允许恢复的边界 |
+| --- | --- | --- |
+| ChatGPT uTLS transport | 复用 HTTP/2 连接和 TLS session；连接已失效时重建 | 响应头之前；只有幂等请求，或带 idempotency key 且 body 可重建的请求，才允许一次快速重放 |
+| CPA | credential / provider 分类、A → B → Ark、首个生成事件前的 in-band 错误吸收 | HTTP 403/408/429/500/502/503/504 与明确的 quota / overload；提交后禁止切换 |
+| Codex App | CPA endpoint 的 request / stream 外层恢复 | 只消费 CPA 最终暴露的失败；不能把已可见的文本、tool call 或 tool result 当成全新请求重放 |
+| LoopX | 记录资格证据、pin、回滚与运维状态 | 不代理模型请求，也不新增第四层 retry |
+
+错误处理顺序如下：
+
+1. DNS、TCP、TLS 或空闲 HTTP/2 连接失效：优先重用连接池；确需重拨时使用已有 TLS
+   session。连接级第一次安全重拨立即执行，不先 sleep。
+2. 401：只刷新一次对应 credential；仍失败则标记该 credential 不健康并进入下一项。
+3. quota、overload、429 或可恢复 5xx：只在首个可见生成事件前按 A → B → Ark 切换。
+4. schema / lifecycle 破坏、foreign compaction barrier、不可恢复 4xx：fail closed，不用高
+   retry 上限掩盖协议错误。
+5. 已发送文本 delta、tool call 或 tool result：返回明确错误和恢复入口，禁止透明重放。
+
+### 在不削减重试保障的前提下降低延迟
+
+- 本机 Codex App → loopback CPA 默认直连。SSH 只属于远端 devbox / 项目访问面，不应成为
+  本机模型请求的必要依赖；CPA `proxy-url` 默认留空。只有直连的错误率或 TTFB 经对照实验
+  显著更差时，才保留独立代理，并记录其健康检查和回滚方式。
+- 重试之前先消除重复握手。ChatGPT uTLS 使用按 proxy scope 有界缓存的 HTTP/2 transport
+  和 TLS session cache；缓存淘汰时关闭 idle connection。对应公共实现见
+  [CLIProxyAPI PR #5261](https://github.com/router-for-me/CLIProxyAPI/pull/5261)。
+- 第一条连接级安全重拨立即执行；后续外层重试使用 bounded exponential backoff + jitter。
+  CPA 当前 `max-retry-interval: 0` 用于快速轮转已知 eligible 项，不能取消 health / cooldown
+  分类后反复敲击同一个已失败 provider。
+- 给整次 turn 设置 wall-clock budget，而不是在 CPA 已建立上游连接后增加固定响应 timeout。
+  budget 耗尽就返回可恢复错误；不要因为 `10` 和 `30 / 30` 都未用完而继续等待。
+- 至少观测 DNS、TCP connect、TLS handshake、TLS resumed、HTTP/2 reused、TTFB、首个可见
+  event、每层 attempt、credential/provider 切换和最终错误分类。没有这些维度，不能判断
+  “慢”来自网络、重复握手、provider 排队还是重试放大。
+
+变更 retry 数值、代理路径或 provider 顺序时，只改一个变量并在 stale task 上做故障注入：
+正常请求、空闲连接断开、TLS 重拨、A 失败转 B、A/B 失败转 Ark、首个 delta 后断流都要
+覆盖。比较 p50/p95 TTFB、成功率、总 wall-clock 和实际 attempt 数；成功率不下降且尾延迟
+改善后再更新 self-use pin。
+
 `stream-bootstrap-buffering` 只允许在首个生成事件提交前吸收 in-band overload / rate-limit
 错误。`multi_agent_v2` 不是这里的默认依赖；只有 compatibility matrix 覆盖 spawn、wait、
 tool result 和 provider 切换后才单独开启。
@@ -247,14 +312,15 @@ base_url = "http://127.0.0.1:<CPA_PORT>/v1"
 wire_api = "responses"
 requires_openai_auth = false
 supports_websockets = false
-request_max_retries = 0
-stream_max_retries = 0
+request_max_retries = 30
+stream_max_retries = 30
 ```
 
 受控 model catalog 同时描述 Auto、A、B、Ark 四个虚拟模型 ID；未配置的 C 不写入 catalog。
-App 的原生模型下拉框就是唯一手动切换入口。Codex client retry 保持为 0，由 CPA 独占
-credential 遍历与 commit barrier，避免双层重试。不要再让 CC Switch 在 App 运行期间
-替换这份 provider 配置。
+App 的原生模型下拉框就是唯一手动切换入口。`30 / 30` 只保留 CPA 之外的外层恢复余量；
+credential 遍历、provider 选择和 commit barrier 仍由 CPA 独占。两层都必须遵守前文的
+提交边界和 wall-clock budget，不能无界相乘。不要再让 CC Switch 在 App 运行期间替换
+这份 provider 配置。
 
 ## 一键切模型时如何切轨迹
 
@@ -403,6 +469,8 @@ in-band SSE error、客户端取消和 handler 自己补出的 lifecycle event�
 | foreign compact → 任意目标 | 明确识别 barrier 并 fork；不发送 opaque foreign blob |
 | 模型下拉框手动切换 | 选中虚拟模型后路由与显示一致，不需要 CC Switch 重启 App |
 | 首字节前 quota / overload | CPA 可重试下一 eligible auth；客户端只看到一条回答 |
+| 空闲 HTTP/2 连接断开 | 下一条安全请求自动重建连接；TLS session 恢复；不重复已提交输出 |
+| 高 retry profile | 故障注入下成功率不低于 qualification baseline；attempt 有界；p50/p95 TTFB、总 wall-clock 和分层错误可解释 |
 | 文本或 tool call 后失败 | 不透明重试；返回可恢复错误 |
 | multipart tool result round trip | 每个唯一 `call_id` 恰好一个逻辑 result，无重复 |
 | `multi_agent` | spawn / wait / result 在每个 provider 上保持结构一致 |
@@ -414,7 +482,7 @@ in-band SSE error、客户端取消和 handler 自己补出的 lifecycle event�
 
 | Upstream | 计划 | 合并门槛 |
 | --- | --- | --- |
-| CPA | **公共分发 PR，已提交 [#5220](https://github.com/router-for-me/CLIProxyAPI/pull/5220)**：provider/credential-scoped history normalizer、attempt commit semantics、`is-compat` Responses SSE lifecycle normalizer 与 focused tests | current upstream `dev` 上可审阅且 CI 通过；review、回归、race、source-built loopback 与真实 provider qualification 分层报告；self-use 可锁定 fork SHA，但不得把它表述为 upstream release |
+| CPA | **公共分发 PR**：[history / SSE normalization #5220](https://github.com/router-for-me/CLIProxyAPI/pull/5220)；[ChatGPT uTLS HTTP/2 连接复用与 TLS session resumption #5261](https://github.com/router-for-me/CLIProxyAPI/pull/5261) | current upstream `dev` 上可审阅且 CI 通过；#5261 还要验证连接复用、异常重建、session resumption 与非幂等请求不重放；self-use 可锁定 fork SHA，但不得把它表述为 upstream release |
 | AgentSwap | **条件 PR**：只有 locked commit 的 Codex writer 不能保持 multipart tool-result 1:1，或需要 provider-neutral checkpoint export 时才提交 | round-trip test 先复现真实缺口；不增加在线 retry、模型选择或第二 data plane |
 | Codex App / App Server | **条件 PR**：只为 compaction barrier 提供原子的 fork + navigate host hook | 普通可移植历史在没有该 PR 时仍须可用；hook 不获得 provider 路由、凭据或 LoopX authority |
 | CC Switch | 当前无 PR | 只保留 bootstrap、credential import、snapshot 和 rollback；不重新进入 per-turn 在线切换 |

@@ -16,19 +16,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.capabilities.auto_research.user_contract import (  # noqa: E402
+from demo.auto_research.user_contract import (  # noqa: E402
     AUTO_RESEARCH_USER_CONTRACT_SCHEMA_VERSION,
     build_auto_research_user_contract,
     infer_auto_research_output_language,
 )
-from loopx.capabilities.auto_research.cli import (  # noqa: E402
+from demo.auto_research.cli import (  # noqa: E402
     _default_auto_research_start_workspace,
 )
-from loopx.capabilities.auto_research.bootstrap_contract import (  # noqa: E402
+from demo.auto_research.bootstrap_contract import (  # noqa: E402
     auto_research_start_command_text,
     build_auto_research_contract_acceptance,
 )
-from loopx.control_plane.agents.multi_agent.visible_launch_policy import (  # noqa: E402
+from demo.multi_agent.visible_launch_policy import (  # noqa: E402
     resolve_codex_trust_workspace,
     resolve_visible_launch_policy,
 )
@@ -161,7 +161,7 @@ def run_cli(temp_dir: Path, *args: str) -> str:
 
 
 def assert_start_wake_contract() -> None:
-    cli_source = (REPO_ROOT / "loopx/capabilities/auto_research/cli.py").read_text(
+    cli_source = (REPO_ROOT / "demo/auto_research/cli.py").read_text(
         encoding="utf-8"
     )
     assert "wake_visible_after_launch=bool(args.wake_visible_after_launch)" not in cli_source

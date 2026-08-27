@@ -2190,9 +2190,17 @@ def assert_active_next_action_todo_survives_compact_candidate_limits() -> None:
         "agent_todo_summary.active_next_action_executable_items"
     ), next_action
     assert guard["recommended_action"] == target_action, guard
-    primary_action = guard["interaction_contract"]["agent_channel"]["primary_action"]
-    assert primary_action.startswith("todo_skillsbench_lifecycle:"), guard
-    assert "Debug SkillsBench product-mode lifecycle" in primary_action, guard
+    selected_todo = guard["selected_todo"]
+    assert selected_todo["todo_id"] == "todo_skillsbench_lifecycle", guard
+    portfolio = guard["action_portfolio"]
+    assert portfolio["primary"]["todo_id"] == "todo_skillsbench_lifecycle", guard
+    assert portfolio["suggested_actions"][0]["todo_id"] == (
+        "todo_skillsbench_lifecycle"
+    ), portfolio
+    agent_channel = guard["interaction_contract"]["agent_channel"]
+    assert agent_channel["selection_required"] is True, agent_channel
+    assert agent_channel["delivery_allowed"] is False, agent_channel
+    assert agent_channel["action_portfolio_ref"] == "$.action_portfolio", agent_channel
     markdown = render_quota_should_run_markdown(guard)
     assert "agent_lane_next_action: todo_id=todo_skillsbench_lifecycle" in markdown, markdown
 

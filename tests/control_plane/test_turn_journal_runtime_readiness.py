@@ -87,6 +87,20 @@ def test_missing_node_blocks_the_typescript_control_plane_and_is_actionable(
     assert "Node.js 22.6.0 or newer" in str(result["recommended_action"])
 
 
+def test_missing_node_request_raises_startup_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(effect_runtime.shutil, "which", lambda _name: None)
+
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as error:
+        effect_runtime.effect_runtime_result("runtime.ping", {})
+
+    assert error.value.diagnostic_code == "node_unavailable"
+    assert "Node.js 22.6.0 or newer" in str(error.value)
+
+
 def test_old_node_is_reported_without_running_semantic_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

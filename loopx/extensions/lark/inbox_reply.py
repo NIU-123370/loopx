@@ -15,7 +15,6 @@ from .event_inbox import (
 )
 from .inbox_reactions import complete_lark_event_inbox_reactions
 
-
 CommandRunner = Callable[[Sequence[str]], Mapping[str, Any]]
 
 AT_MENTION_PATTERN = re.compile(
@@ -24,15 +23,16 @@ AT_MENTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MENTION_ID_KEYS = ("open_id", "user_id", "union_id")
+FENCED_CODE_PATTERN = re.compile(r"```.*?```", re.DOTALL)
 
 
 def _default_runner(args: Sequence[str]) -> Mapping[str, Any]:
     result = subprocess.run(
         list(args),
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         timeout=30,
+        check=False,
     )
     return {
         "returncode": result.returncode,
@@ -78,7 +78,11 @@ def _message(value: Any, message_id: str) -> Mapping[str, Any] | None:
         if str(value.get("message_id") or "") == message_id:
             return value
         return next(
-            (found for child in value.values() if (found := _message(child, message_id))),
+            (
+                found
+                for child in value.values()
+                if (found := _message(child, message_id))
+            ),
             None,
         )
     if isinstance(value, list):
@@ -144,18 +148,26 @@ def _canonical_expected_text(text: str) -> tuple[str, dict[str, str]]:
         )
         return token
 
-    return " ".join(AT_MENTION_PATTERN.sub(replace, text).split()), identity_tokens
+    replaced = AT_MENTION_PATTERN.sub(replace, text)
+    return _normalized_lines(replaced), identity_tokens
 
 
-def _readback_matches_reply(
-    *, reply_text: str, message: Mapping[str, Any]
-) -> bool:
+def _normalized_lines(value: Any) -> str:
+    lines = [" ".join(line.split()) for line in str(value or "").splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _readback_matches_reply(*, reply_text: str, message: Mapping[str, Any]) -> bool:
     expected_text, identity_tokens = _canonical_expected_text(reply_text)
     actual_text = _message_text(message)
     if not actual_text:
         return False
     if not identity_tokens:
-        return " ".join(actual_text.split()) == expected_text
+        return _normalized_lines(actual_text) == expected_text
 
     mentions = message.get("mentions")
     if not isinstance(mentions, list):
@@ -204,16 +216,39 @@ def _readback_matches_reply(
         if len(rendered_candidates) != 1:
             return False
         actual_text = actual_text.replace(rendered_candidates[0], token)
-    return " ".join(actual_text.split()) == expected_text
+    return _normalized_lines(actual_text) == expected_text
 
 
 def _normalized_reply_text(value: Any) -> str:
-    lines = [" ".join(line.split()) for line in str(value or "").splitlines()]
-    while lines and not lines[0]:
-        lines.pop(0)
-    while lines and not lines[-1]:
-        lines.pop()
-    return "\n".join(lines)[:1200]
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    outside_code = FENCED_CODE_PATTERN.sub("", text)
+    if r"\n" in outside_code:
+        raise ValueError(
+            "lark inbox reply contains a literal backslash-n outside fenced code; "
+            "pass real newlines"
+        )
+    return _normalized_lines(text)[:1200]
+
+
+def _provider_preview_matches_reply(
+    *, reply_text: str, payload: Mapping[str, Any]
+) -> bool:
+    data = payload.get("data")
+    api_calls = payload.get("api")
+    if not isinstance(api_calls, list) and isinstance(data, Mapping):
+        api_calls = data.get("api")
+    if not isinstance(api_calls, list):
+        return False
+    for call in api_calls:
+        if not isinstance(call, Mapping):
+            continue
+        body = call.get("body")
+        if not isinstance(body, Mapping):
+            continue
+        preview_text = _content_text(body)
+        if preview_text and _normalized_lines(preview_text) == reply_text:
+            return True
+    return False
 
 
 def _result(
@@ -230,6 +265,9 @@ def _result(
     reaction_cleanup_verified: bool = False,
     placement: str | None = None,
     blocker: str | None = None,
+    format_preflight_passed: bool = False,
+    provider_preview_performed: bool = False,
+    provider_preview_verified: bool = False,
 ) -> dict[str, Any]:
     packet: dict[str, Any] = {
         "ok": ok,
@@ -244,6 +282,9 @@ def _result(
         "reaction_cleanup_verified": reaction_cleanup_verified,
         "sender_identity_verified": identity_verified,
         "sender_chat_membership_verified": membership_verified,
+        "format_preflight_passed": format_preflight_passed,
+        "provider_preview_performed": provider_preview_performed,
+        "provider_preview_verified": provider_preview_verified,
         "private_sender_profile_captured": False,
         "private_chat_id_captured": False,
         "private_message_id_captured": False,
@@ -264,6 +305,7 @@ def reply_lark_event_inbox(
     message_id: str,
     text: str,
     execute: bool = False,
+    provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
 ) -> dict[str, Any]:
     """Reply with the explicit inbox-configured bot and placement policy."""
@@ -327,13 +369,14 @@ def reply_lark_event_inbox(
         ).encode("utf-8")
     ).hexdigest()
     receipt = f"sha256:{digest}"
-    if not execute:
+    if not execute and not provider_preflight:
         return _result(
             status="preview_ready",
             ok=True,
             execute=False,
             receipt=receipt,
             placement=placement,
+            format_preflight_passed=True,
         )
 
     base = ["lark-cli", "--profile", profile]
@@ -351,9 +394,10 @@ def reply_lark_event_inbox(
         return _result(
             status="gate_required",
             ok=False,
-            execute=True,
+            execute=execute,
             receipt=receipt,
             blocker="lark_inbox_reply_sender_identity_mismatch",
+            format_preflight_passed=True,
         )
 
     membership = _call(
@@ -375,10 +419,11 @@ def reply_lark_event_inbox(
         return _result(
             status="gate_required",
             ok=False,
-            execute=True,
+            execute=execute,
             receipt=receipt,
             identity_verified=True,
             blocker="lark_inbox_reply_sender_not_in_configured_chat",
+            format_preflight_passed=True,
         )
 
     destination = (
@@ -401,8 +446,7 @@ def reply_lark_event_inbox(
             "--reply-in-thread",
         ]
     )
-    send = _call(
-        runner,
+    provider_args = (
         base
         + destination
         + [
@@ -412,7 +456,46 @@ def reply_lark_event_inbox(
             "bot",
             "--format",
             "json",
-        ],
+        ]
+    )
+    preview = _call(runner, provider_args + ["--dry-run"])
+    provider_preview_verified = bool(
+        preview.get("returncode") == 0
+        and _provider_preview_matches_reply(
+            reply_text=reply_text,
+            payload=_json_object(preview.get("stdout")),
+        )
+    )
+    if not provider_preview_verified:
+        return _result(
+            status="gate_required",
+            ok=False,
+            execute=execute,
+            receipt=receipt,
+            identity_verified=True,
+            membership_verified=True,
+            placement=placement,
+            blocker="lark_inbox_reply_provider_preview_mismatch",
+            format_preflight_passed=True,
+            provider_preview_performed=True,
+        )
+    if not execute:
+        return _result(
+            status="preview_ready",
+            ok=True,
+            execute=False,
+            receipt=receipt,
+            identity_verified=True,
+            membership_verified=True,
+            placement=placement,
+            format_preflight_passed=True,
+            provider_preview_performed=True,
+            provider_preview_verified=True,
+        )
+
+    send = _call(
+        runner,
+        provider_args,
     )
     if send.get("returncode") != 0:
         return _result(
@@ -424,6 +507,9 @@ def reply_lark_event_inbox(
             membership_verified=True,
             placement=placement,
             blocker="lark_inbox_reply_provider_failed",
+            format_preflight_passed=True,
+            provider_preview_performed=True,
+            provider_preview_verified=True,
         )
 
     reply_message_id = _message_id(_json_object(send.get("stdout")))
@@ -438,6 +524,9 @@ def reply_lark_event_inbox(
             write_performed=True,
             placement=placement,
             blocker="lark_inbox_reply_not_verified",
+            format_preflight_passed=True,
+            provider_preview_performed=True,
+            provider_preview_verified=True,
         )
     readback = _call(
         runner,
@@ -504,4 +593,7 @@ def reply_lark_event_inbox(
             if verified
             else "lark_inbox_reply_not_verified"
         ),
+        format_preflight_passed=True,
+        provider_preview_performed=True,
+        provider_preview_verified=True,
     )

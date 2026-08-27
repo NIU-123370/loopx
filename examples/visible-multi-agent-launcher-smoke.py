@@ -16,11 +16,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from loopx.control_plane.agents.multi_agent.runtime_scripts import (  # noqa: E402
+from demo.multi_agent.runtime_scripts import (  # noqa: E402
     CODEX_TUI_EXEC_PY as _CODEX_TUI_EXEC_PY,
     SCOPED_LOOPX_WRAPPER_PY as _SCOPED_LOOPX_WRAPPER_PY,
 )
-from loopx.visible_multi_agent_launcher import (  # noqa: E402
+from demo.visible_multi_agent_launcher import (  # noqa: E402
     TUI_MULTI_AGENT_RUNNER_CONTRACT_SCHEMA_VERSION,
     build_visible_multi_agent_payload,
     build_visible_multi_agent_payload_from_spec,
@@ -74,24 +74,24 @@ def run_with_pty(command: list[str], *, env: dict[str, str]) -> tuple[int, str]:
 
 
 def main() -> int:
-    auto_research_cli = (ROOT / "loopx/capabilities/auto_research/cli.py").read_text(
+    auto_research_cli = (ROOT / "demo/auto_research/cli.py").read_text(
         encoding="utf-8"
     )
-    launcher_source = (ROOT / "loopx/visible_multi_agent_launcher.py").read_text(
+    launcher_source = (ROOT / "demo/visible_multi_agent_launcher.py").read_text(
         encoding="utf-8"
     )
-    tmux_source = (ROOT / "loopx/visible_multi_agent_tmux.py").read_text(
+    tmux_source = (ROOT / "demo/visible_multi_agent_tmux.py").read_text(
         encoding="utf-8"
     )
-    contract_source = (ROOT / "loopx/control_plane/agents/multi_agent/contract.py").read_text(
+    contract_source = (ROOT / "demo/multi_agent/contract.py").read_text(
         encoding="utf-8"
     )
     runtime_source = (
-        ROOT / "loopx/control_plane/agents/multi_agent/runtime_scripts.py"
+        ROOT / "demo/multi_agent/runtime_scripts.py"
     ).read_text(
         encoding="utf-8"
     )
-    assert "from ...visible_multi_agent_launcher import" in auto_research_cli
+    assert "from ..visible_multi_agent_launcher import" in auto_research_cli
     assert "execute_visible_multi_agent_launcher" in auto_research_cli
     forbidden_defs = [
         "def _launch_auto_research_with_tmux",

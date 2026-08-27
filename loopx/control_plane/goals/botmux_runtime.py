@@ -15,7 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from ...file_lock import exclusive_file_lock
+from ...file_lock import LockAcquireTimeoutError, exclusive_file_lock
+from ...file_lock import lock_timeout_error_fields
 from ...paths import registry_project_root
 from ...registry import registry_goals
 
@@ -499,6 +500,23 @@ def _assert_public_packet(packet: Mapping[str, Any]) -> None:
     visit(packet)
 
 
+def _lock_timeout_packet(
+    *, goal_id: str, operation: str, execute: bool, error: LockAcquireTimeoutError
+) -> dict[str, Any]:
+    packet = _operation_packet(
+        ok=False,
+        goal_id=goal_id,
+        operation=operation,
+        execute=execute,
+        status="blocked",
+        blocker="botmux_runtime_lock_timeout",
+        public_summary="the botmux runtime binding is busy; inspect the lock holder and retry",
+    )
+    packet.update(lock_timeout_error_fields(error))
+    _assert_public_packet(packet)
+    return packet
+
+
 def _probe_botmux(
     *,
     binding: Mapping[str, Any],
@@ -721,67 +739,61 @@ def doctor_botmux_runtime(
     binding_path: Path,
     requester: JsonRequester = _request_json,
 ) -> dict[str, Any]:
-    binding = botmux_binding_for_goal(
-        read_botmux_runtime_binding(binding_path),
-        goal_id,
-    )
-    if binding is None or binding.get("enabled") is not True:
-        return _operation_packet(
-            ok=False,
-            goal_id=goal_id,
-            operation="runtime_doctor",
-            execute=False,
-            status="blocked",
-            blocker="botmux_binding_missing",
-            public_summary="configure a botmux runtime binding for this goal",
-        )
     try:
-        probe = _probe_botmux(binding=binding, requester=requester)
-    except ValueError as exc:
-        blocker = (
-            "botmux_auth_unavailable"
-            if "token is unavailable" in str(exc)
-            else "botmux_configuration_invalid"
+        with exclusive_file_lock(binding_path, operation="botmux_runtime_doctor"):
+            binding = botmux_binding_for_goal(
+                read_botmux_runtime_binding(binding_path),
+                goal_id,
+            )
+            if binding is None or binding.get("enabled") is not True:
+                return _operation_packet(
+                    ok=False,
+                    goal_id=goal_id,
+                    operation="runtime_doctor",
+                    execute=False,
+                    status="blocked",
+                    blocker="botmux_binding_missing",
+                    public_summary="configure a botmux runtime binding for this goal",
+                )
+            try:
+                probe = _probe_botmux(binding=binding, requester=requester)
+            except (ValueError, BotmuxApiError, BotmuxTransportError) as exc:
+                if isinstance(exc, ValueError):
+                    blocker = (
+                        "botmux_auth_unavailable"
+                        if "token is unavailable" in str(exc)
+                        else "botmux_configuration_invalid"
+                    )
+                    summary = "the botmux runtime binding is not ready"
+                elif isinstance(exc, BotmuxApiError):
+                    blocker = "botmux_api_rejected"
+                    summary = "botmux rejected the runtime readiness probe"
+                else:
+                    blocker = "botmux_unreachable"
+                    summary = "the configured botmux daemon is unreachable"
+                return _operation_packet(
+                    ok=False,
+                    goal_id=goal_id,
+                    operation="runtime_doctor",
+                    execute=False,
+                    status="blocked",
+                    blocker=blocker,
+                    public_summary=summary,
+                )
+            return _operation_packet(
+                ok=True,
+                goal_id=goal_id,
+                operation="runtime_doctor",
+                execute=False,
+                status="ready",
+                public_summary="the botmux runtime binding is ready",
+                readback_verified=True,
+                details=probe,
+            )
+    except LockAcquireTimeoutError as exc:
+        return _lock_timeout_packet(
+            goal_id=goal_id, operation="runtime_doctor", execute=False, error=exc
         )
-        return _operation_packet(
-            ok=False,
-            goal_id=goal_id,
-            operation="runtime_doctor",
-            execute=False,
-            status="blocked",
-            blocker=blocker,
-            public_summary="the botmux runtime binding is not ready",
-        )
-    except BotmuxApiError:
-        return _operation_packet(
-            ok=False,
-            goal_id=goal_id,
-            operation="runtime_doctor",
-            execute=False,
-            status="blocked",
-            blocker="botmux_api_rejected",
-            public_summary="botmux rejected the runtime readiness probe",
-        )
-    except BotmuxTransportError:
-        return _operation_packet(
-            ok=False,
-            goal_id=goal_id,
-            operation="runtime_doctor",
-            execute=False,
-            status="blocked",
-            blocker="botmux_unreachable",
-            public_summary="the configured botmux daemon is unreachable",
-        )
-    return _operation_packet(
-        ok=True,
-        goal_id=goal_id,
-        operation="runtime_doctor",
-        execute=False,
-        status="ready",
-        public_summary="the botmux runtime binding is ready",
-        readback_verified=True,
-        details=probe,
-    )
 
 
 def _disable_botmux_runtime(
@@ -1455,19 +1467,25 @@ def status_botmux_runtime(
     execute: bool = False,
     requester: JsonRequester = _request_json,
 ) -> dict[str, Any]:
-    if not execute:
-        return _status_botmux_runtime(
-            goal_id=goal_id,
-            binding_path=binding_path,
-            execute=False,
-            requester=requester,
-        )
-    with exclusive_file_lock(binding_path, operation="botmux_runtime_status"):
-        return _status_botmux_runtime(
-            goal_id=goal_id,
-            binding_path=binding_path,
-            execute=True,
-            requester=requester,
+    if execute:
+        with exclusive_file_lock(binding_path, operation="botmux_runtime_status"):
+            return _status_botmux_runtime(
+                goal_id=goal_id,
+                binding_path=binding_path,
+                execute=True,
+                requester=requester,
+            )
+    try:
+        with exclusive_file_lock(binding_path, operation="botmux_runtime_status"):
+            return _status_botmux_runtime(
+                goal_id=goal_id,
+                binding_path=binding_path,
+                execute=False,
+                requester=requester,
+            )
+    except LockAcquireTimeoutError as exc:
+        return _lock_timeout_packet(
+            goal_id=goal_id, operation="runtime_status", execute=False, error=exc
         )
 
 

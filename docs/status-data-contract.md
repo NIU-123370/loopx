@@ -1023,8 +1023,12 @@ Item fields:
   the current peer before an agent-scoped no-candidate wait is allowed.
   Open todos may also carry `resume_when`; status should attach
   `resume_condition` / `resume_ready` but keep the item out of executable
-  backlog until `resume_ready=true`. This lets agents see not-yet-unlocked
-  successors without accidentally selecting them as current work.
+  backlog until `resume_ready=true`. A `monitor_changed:<todo_id>` condition
+  additionally carries `resume_monitor_generation`, while the target monitor
+  carries monotonic `material_change_generation`; readiness requires the
+  latter to be strictly greater. This lets agents see not-yet-unlocked
+  successors without accidentally selecting them as current work or waking on
+  an unchanged/replayed monitor result.
   Optional future fields such as `created_at`, lease TTLs, dependencies, or
   evidence links should extend this item shape rather than inventing another
   todo surface.
@@ -1250,7 +1254,7 @@ co-displayed global agent todo rows as goal-wide, so `--agent-id` is not
 mistaken for a filter that replaces the goal-wide queue.
 When more than one already-admitted advancement todo remains runnable, the
 same guard also includes `action_portfolio.schema_version=
-quota_action_portfolio_v1`. `primary` is the ordered recommendation, while
+quota_action_portfolio_v2`. `primary` is the ordered recommendation, while
 `suggested_actions` is the single canonical bounded convenience view: it carries
 the recommendation plus at most two ordered, agent-scoped, capability-ready
 alternatives and labels them `recommended` or `alternative`. The portfolio does
@@ -1261,6 +1265,22 @@ the legal choice boundary separate from the displayed suggestions;
 `selection_policy.decision_owner=agent` and
 `recommendation_role=default_not_binding` make the priority order advisory at
 this boundary rather than silently binding the first Todo.
+
+Version 2 adds the optional `continuation_hint` field to each
+`suggested_actions[]` item so an agent can see the candidate's next execution
+boundary without joining the compact packet back to the full Todo summary.
+All v1 selection, ordering, identity, and permission semantics remain
+unchanged. The default producer now emits only v2; `quota should-run`, compact
+CLI output, TurnEnvelope, and the model-free `loopx turn` controller all carry
+or consume that version. The compact CLI projection separately reports
+`suggested_action_details.schema_version=
+quota_cli_action_portfolio_compaction_v1` and inlines `todo_id`,
+`selection_role`, `priority`, `action_kind`, `text`, and `continuation_hint`.
+Hosts that match schema versions exactly must upgrade their portfolio decoder
+before consuming the new default. There is no v1 dual-emission or downgrade
+negotiation; an unknown version must fail closed rather than silently treating
+the recommendation as delivery authority. Consumers that already ignore
+unknown additive item fields still need to accept the explicit v2 version.
 
 The first quota response sets `selection_required=true` and exposes one typed
 `selection_command.command_args_template` with a `{todo_id}` placeholder plus a
@@ -1276,6 +1296,30 @@ defers the request and keeps the receipt identity-less. A qualified request does
 not need to have appeared in the bounded suggestions. Only the upgraded response
 restores delivery and its settlement plan. If there is only one admitted action,
 no portfolio selection phase is added.
+
+When selected work has meaningful typed lineage, waiting, sibling, or
+goal-acceptance context, the same default guard may also include
+`planning_horizon.schema_version=quota_planning_horizon_v0`. It is a bounded
+read-only projection: at most five Todo items, eight typed relations, two
+acceptance gaps, and three attention ids. `source_context_todo_count` covers
+open plus deferred source Todos; omission and text-truncation counters make an
+incomplete slice explicit. `successor` remains `lineage_only`, while
+`resumes_when` and `unblocks` retain their existing typed lifecycle semantics.
+The horizon does not make another Todo executable and does not change the
+selected Todo. Consumers must use the existing explicit selection re-entry for
+another runnable action and follow `detail_refs` before treating an incomplete
+horizon as exhaustive.
+
+`action_portfolio`, `planning_horizon`, and the explicit agent-Todo detail lens
+derive from one `todo_planning_inventory_v0`. `planning_state` and `claim_state`
+are orthogonal: runnable unclaimed work carries
+`claim_required_before_work=true`, while work claimed by another agent is not
+silently made executable. `quota should-run --include-detail agent-todos`
+exposes the larger bounded `todo_planning_inventory_detail_v0` projection;
+`item_detail_ref=$.agent_todo_summary` avoids copying full Todo payloads. Its
+completeness counters remain authoritative for omissions. Consumers that need
+the complete open source follow `detail_refs.full_todo_list` rather than
+assuming either bounded projection is exhaustive.
 
 Correctly typed future work is handled earlier. A higher-priority
 `continuous_monitor` with a valid future `next_due_at` is not executable; quota

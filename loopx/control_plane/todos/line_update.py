@@ -187,6 +187,26 @@ def link_superseding_todo_id(
     return metadata_updated
 
 
+def _resume_metadata_updates(
+    *,
+    normalized_resume_when: str | None,
+    resume_monitor_generation: int | None,
+    clear_resume_when: bool,
+) -> dict[str, Any]:
+    if clear_resume_when:
+        return {"resume_when": None, "resume_monitor_generation": None}
+    if not normalized_resume_when:
+        return {}
+    return {
+        "resume_when": normalized_resume_when,
+        "resume_monitor_generation": (
+            resume_monitor_generation
+            if normalized_resume_when.startswith("monitor_changed:")
+            else None
+        ),
+    }
+
+
 def apply_todo_update_to_lines(
     lines: list[str],
     *,
@@ -226,6 +246,7 @@ def apply_todo_update_to_lines(
     completion_recovery: str | None = None,
     completion_metadata_updates_override: Mapping[str, Any] | None = None,
     resume_when: str | None = None,
+    resume_monitor_generation: int | None = None,
     clear_resume_when: bool = False,
     no_followup: bool | None = None,
     monitor_metadata: dict[str, Any] | None = None,
@@ -359,10 +380,13 @@ def apply_todo_update_to_lines(
         updates["unblocks_todo_id"] = unblocks_todo_id
     if successor_todo_ids is not None:
         updates["successor_todo_ids"] = successor_todo_ids
-    if clear_resume_when:
-        updates["resume_when"] = None
-    elif normalized_resume_when:
-        updates["resume_when"] = normalized_resume_when
+    updates.update(
+        _resume_metadata_updates(
+            normalized_resume_when=normalized_resume_when,
+            resume_monitor_generation=resume_monitor_generation,
+            clear_resume_when=clear_resume_when,
+        )
+    )
     if no_followup is not None:
         updates["no_followup"] = no_followup
     updates.update(
@@ -459,6 +483,9 @@ def apply_todo_update_to_lines(
         "resume_when": normalize_todo_resume_when(
             effective_metadata.get("resume_when")
         ),
+        "resume_monitor_generation": effective_metadata.get(
+            "resume_monitor_generation"
+        ),
         "no_followup": normalize_todo_no_followup(
             effective_metadata.get("no_followup")
         ),
@@ -467,4 +494,7 @@ def apply_todo_update_to_lines(
         "next_due_at": effective_metadata.get("next_due_at"),
         "expires_at": effective_metadata.get("expires_at"),
         "watch_only": effective_metadata.get("watch_only"),
+        "material_change_generation": effective_metadata.get(
+            "material_change_generation"
+        ),
     }

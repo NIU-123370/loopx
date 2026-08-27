@@ -39,11 +39,18 @@ BUILTIN_IDS = [
     "content-ops",
     "value-connectors",
     "explore",
-    "auto-research",
     "deep-research",
     "public-safe-outbound",
     "connector-registry",
 ]
+
+
+def test_auto_research_is_not_a_product_catalog_capability() -> None:
+    """Auto-research is a demo showcase, not a shipped product capability."""
+
+    packet = build_capability_catalog_packet()
+    ids = [item["id"] for item in packet["capabilities"]]
+    assert "auto-research" not in ids
 
 
 def test_benchmark_toolkit_catalog_exposes_integrity_boundary() -> None:
@@ -422,9 +429,9 @@ def test_installed_runtime_is_catalog_truth_and_cli_default(
     }
 
 
-def test_active_explore_and_auto_research_records_point_to_real_smokes() -> None:
+def test_active_explore_record_points_to_real_smokes() -> None:
     repository = Path(__file__).resolve().parents[2]
-    for capability_id in ("explore", "auto-research"):
+    for capability_id in ("explore",):
         record = build_capability_detail_packet(capability_id)["capability"]
         assert record["provider_state"]["ready"] is True
         assert record["smokes"]

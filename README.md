@@ -200,7 +200,7 @@ This screenshot comes from LoopX's built-in exact-KNN demo. The public task,
 editable and protected files, deterministic CPU evaluator, and dev/held-out
 commands all live in this repository. Follow the
 [showcase walkthrough](docs/product/use-cases/auto-research/decentralized-auto-research-showcase.md)
-or the [command path](loopx/capabilities/auto_research/README.md) to reproduce the
+or the [demo command path](demo/auto_research/README.md) to reproduce the
 workflow; it is a demo result, not a production research claim.
 
 ### Used In Real Projects
@@ -462,7 +462,7 @@ Safe presets cover daily triage, changelog drafts, and PR watching. The
 one-command research path coordinates proposer, executor, and
 evaluator/promoter roles while keeping quota and evidence visible. See the
 [beginner preset guide](docs/product/foundations/beginner-loop-presets.md) and
-[Auto Research command path](loopx/capabilities/auto_research/README.md).
+[Auto Research demo path](demo/auto_research/README.md).
 
 ```bash
 loopx preset list

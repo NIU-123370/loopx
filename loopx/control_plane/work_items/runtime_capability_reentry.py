@@ -64,6 +64,7 @@ def build_runtime_capability_reentry_packet(
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
+    turn_instance_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Project verified runtime-capability re-entry without persisting a grant."""
 
@@ -119,6 +120,8 @@ def build_runtime_capability_reentry_packet(
     ]
     if agent_id:
         base_args.extend(["--agent-id", agent_id])
+    if turn_instance_id:
+        base_args.extend(["--turn-instance-id", turn_instance_id])
     for capability in observed:
         base_args.extend(["--available-capability", capability])
 

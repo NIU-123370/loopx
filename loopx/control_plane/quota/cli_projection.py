@@ -30,7 +30,7 @@ QUOTA_CLI_CAPABILITY_GATE_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_capability_gate_compaction_v0"
 )
 QUOTA_CLI_ACTION_PORTFOLIO_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_action_portfolio_compaction_v0"
+    "quota_cli_action_portfolio_compaction_v1"
 )
 QUOTA_CLI_MONITOR_POLL_DECISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_monitor_poll_decision_compaction_v0"
@@ -73,6 +73,7 @@ _RETAINED_AGENT_ITEM_FIELDS = (
     "unblocks_todo_id",
     "continuation_policy",
     "resume_when",
+    "resume_monitor_generation",
     "target_key",
     "cadence",
     "next_due_at",
@@ -80,6 +81,7 @@ _RETAINED_AGENT_ITEM_FIELDS = (
     "last_checked_at",
     "consecutive_no_change",
     "material_change",
+    "material_change_generation",
     "result_hash",
     "reason",
 )
@@ -384,15 +386,30 @@ def _compact_action_portfolio(portfolio: dict[str, Any]) -> dict[str, Any]:
     if isinstance(suggested, list):
         compact["suggested_actions"] = [
             {
-                key: item[key]
-                for key in ("todo_id", "selection_role")
-                if key in item
+                **{
+                    key: item[key]
+                    for key in ("todo_id", "selection_role", "priority", "action_kind")
+                    if key in item
+                },
+                **{
+                    key: " ".join(str(item[key]).split())[:180]
+                    for key in ("text", "continuation_hint")
+                    if item.get(key)
+                },
             }
             for item in suggested
             if isinstance(item, dict)
         ]
         compact["suggested_action_details"] = {
             "schema_version": QUOTA_CLI_ACTION_PORTFOLIO_COMPACTION_SCHEMA_VERSION,
+            "inlined_fields": [
+                "todo_id",
+                "selection_role",
+                "priority",
+                "action_kind",
+                "text",
+                "continuation_hint",
+            ],
             "ref": "$.agent_todo_summary.first_executable_items",
         }
     return compact

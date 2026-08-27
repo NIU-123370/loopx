@@ -9,6 +9,8 @@ import pytest
 from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
     build_benchmark_experiment_board,
+    build_benchmark_four_arm_contract,
+    compact_benchmark_four_arm_contract,
     default_benchmark_experiment_board_path,
     normalize_benchmark_experiment_board_row,
     preview_benchmark_experiment_board_reconcile,
@@ -122,6 +124,71 @@ def _running_baseline(**overrides: object) -> dict[str, object]:
     )
     payload.update(overrides)
     return payload
+
+
+def _four_arm_contract() -> dict[str, object]:
+    return compact_benchmark_four_arm_contract(
+        build_benchmark_four_arm_contract(
+            base_goal_text="Complete the requested task.",
+            domain_hint="Independently validate every public requirement.",
+            hint_id="swe_hint",
+            domain_hint_independent_of_loopx=True,
+        )
+    )
+
+
+def _four_arm_rows() -> list[dict[str, object]]:
+    runner_revision = "0123456789abcdef"
+    loopx_runtime = {
+        "provider_id": "loopx",
+        "version": "0.6.0",
+        "revision": "abcdef0123456789",
+    }
+    goal_plain = _baseline(
+        run_id="goal-plain-12",
+        arm_id="goal_plain",
+        runner_revision=runner_revision,
+    )
+    goal_plain["metrics"] = {
+        **goal_plain["metrics"],
+        "feature_pass": {
+            "value": 10,
+            "total": 66,
+            "higher_is_better": True,
+        },
+    }
+    loopx_plain = _row(
+        run_id="loopx-plain-12",
+        arm_id="loopx_plain",
+        arm_role="treatment",
+        protocol_id="loopx-plain-v1",
+        observed_at="2026-08-18T00:10:00+00:00",
+        f2p=14,
+        comparison_anchor_run_id="goal-plain-12",
+        orchestrator_runtime=loopx_runtime,
+    )
+    goal_hint = _row(
+        run_id="goal-hint-12",
+        arm_id="goal_swe_hint",
+        arm_role="control",
+        protocol_id="goal-hint-v1",
+        observed_at="2026-08-18T00:20:00+00:00",
+        f2p=13,
+        comparison_anchor_run_id="goal-plain-12",
+    )
+    loopx_hint = _row(
+        run_id="loopx-hint-12",
+        arm_id="loopx_swe_hint",
+        arm_role="treatment",
+        protocol_id="loopx-hint-v1",
+        observed_at="2026-08-18T00:30:00+00:00",
+        f2p=20,
+        comparison_anchor_run_id="goal-hint-12",
+        orchestrator_runtime=loopx_runtime,
+    )
+    for row in (loopx_plain, goal_hint, loopx_hint):
+        row["runner_revision"] = runner_revision
+    return [goal_plain, loopx_plain, goal_hint, loopx_hint]
 
 
 def _connected_goal_registries(tmp_path: Path) -> tuple[Path, Path]:
@@ -287,6 +354,114 @@ def test_board_keeps_standard_and_explore_lanes_and_compares_explicit_anchor() -
     assert board["agent_guidance"]["required_sequence"][0] == (
         "read_board_before_launch_or_case_selection"
     )
+
+
+def test_board_projects_explicit_four_arm_conditional_effects_and_interaction() -> None:
+    board = build_benchmark_experiment_board(
+        _four_arm_rows(),
+        four_arm_contract=_four_arm_contract(),
+    )
+
+    assert board["summary"]["factorial_contrast_count"] == 1
+    assert board["summary"]["factorial_contrast_countable_count"] == 1
+    contrast = board["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is True
+    assert contrast["reason_codes"] == []
+    effects = {
+        item["effect"]: item["metric_deltas"]["feature_pass"]["delta"]
+        for item in contrast["conditional_effects"]
+    }
+    assert effects == {
+        "loopx_without_domain_hint": 4,
+        "domain_hint_without_loopx": 3,
+        "loopx_with_domain_hint": 7,
+    }
+    interaction = contrast["interaction_contrast"]["metric_contrasts"]["feature_pass"]
+    assert interaction["difference_in_differences"] == 3
+    assert interaction["direction"] == "improved"
+    assert interaction["difference_in_differences_rate"] == pytest.approx(3 / 66)
+
+    standard = {item["candidate_arm_id"]: item for item in board["comparisons"]}
+    assert standard["loopx_swe_hint"]["matched_pair_countable"] is False
+    assert standard["loopx_swe_hint"]["reason_codes"] == [
+        "standard_arm_anchor_is_not_baseline"
+    ]
+    assert "Countable factorial contrasts: `1`" in (
+        render_benchmark_experiment_board_markdown(board)
+    )
+
+
+def test_factorial_projection_fails_closed_on_ambiguous_or_misaligned_cells() -> None:
+    rows = _four_arm_rows()
+    duplicate = dict(rows[1])
+    duplicate["run_id"] = "loopx-plain-12-r2"
+    duplicate["observed_at"] = "2026-08-18T00:11:00+00:00"
+    rows.append(duplicate)
+    board = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )
+    contrast = board["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is False
+    assert contrast["reason_codes"] == ["cell_has_ambiguous_score_countable_runs"]
+    cells = {item["arm_id"]: item for item in contrast["cells"]}
+    assert cells["loopx_plain"]["reason_codes"] == ["ambiguous_score_countable_runs"]
+
+    rows = _four_arm_rows()
+    rows[3]["comparison_anchor_run_id"] = "goal-plain-12"
+    rows[3]["runner_revision"] = "different-revision"
+    board = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )
+    contrast = board["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is False
+    assert contrast["reason_codes"] == [
+        "cell_comparison_anchor_run_mismatch",
+        "runner_revision_mismatch",
+    ]
+    cells = {item["arm_id"]: item for item in contrast["cells"]}
+    assert cells["loopx_swe_hint"]["reason_codes"] == ["comparison_anchor_run_mismatch"]
+
+    rows = _four_arm_rows()
+    rows[3]["orchestrator_runtime"] = {
+        "provider_id": "loopx",
+        "version": "0.6.0",
+        "revision": "different-revision",
+    }
+    rows[3]["metrics"]["feature_pass"]["total"] = 67
+    board = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )
+    contrast = board["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is False
+    assert contrast["reason_codes"] == [
+        "loopx_orchestrator_runtime_mismatch",
+        "primary_metric_definition_mismatch",
+    ]
+
+    rows = _four_arm_rows()
+    shared_runtime = rows[1]["orchestrator_runtime"]
+    rows[0]["orchestrator_runtime"] = shared_runtime
+    rows[2]["orchestrator_runtime"] = shared_runtime
+    board = build_benchmark_experiment_board(
+        rows,
+        four_arm_contract=_four_arm_contract(),
+    )
+    contrast = board["factorial_contrasts"][0]
+    assert contrast["factorial_contrast_countable"] is False
+    assert contrast["reason_codes"] == ["factor_runtime_cohorts_not_distinct"]
+
+    contract = _four_arm_contract()
+    contract["primary_comparisons"][0]["effect"] = "mislabelled_effect"
+    with pytest.raises(
+        ValueError, match="primary comparisons do not match factor design"
+    ):
+        build_benchmark_experiment_board(
+            _four_arm_rows(),
+            four_arm_contract=contract,
+        )
 
 
 def test_locked_jsonl_upsert_updates_one_stable_run_row(tmp_path: Path) -> None:
@@ -486,6 +661,47 @@ def test_cli_previews_then_writes_and_reads_board(tmp_path: Path) -> None:
     assert shown_payload["summary"]["run_count"] == 1
     assert shown_payload["agent_guidance"]["next_action"] == (
         "close_running_rows_or_review_matched_comparisons"
+    )
+
+
+def test_cli_show_projects_factorial_contrast_from_explicit_contract(
+    tmp_path: Path,
+) -> None:
+    ledger = default_benchmark_experiment_board_path(
+        project=tmp_path, goal_id="fixture-goal"
+    )
+    for row in _four_arm_rows():
+        upsert_benchmark_experiment_board_row(ledger, row)
+    contract_path = tmp_path / "four-arm-contract.json"
+    contract_path.write_text(json.dumps(_four_arm_contract()), encoding="utf-8")
+
+    shown = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts/loopx"),
+            "benchmark",
+            "experiment-board-show",
+            "--goal-id",
+            "fixture-goal",
+            "--project",
+            str(tmp_path),
+            "--four-arm-contract-json",
+            str(contract_path),
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    payload = json.loads(shown.stdout)
+    assert payload["summary"]["factorial_contrast_countable_count"] == 1
+    assert (
+        payload["factorial_contrasts"][0]["interaction_contrast"]["metric_contrasts"][
+            "feature_pass"
+        ]["difference_in_differences"]
+        == 3
     )
 
 
