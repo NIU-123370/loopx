@@ -977,6 +977,28 @@ def test_start_goal_guided_skips_blocked_agent_frontier() -> None:
         assert "write_ordered_todos" in blocked_step_ids, blocked_step_ids
 
 
+def test_start_goal_guided_skips_continuous_monitor_frontier() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "monitor-frontier-project"
+        _write_reuse_frontier_project(
+            project,
+            "- [ ] Observe the upstream release window\n"
+            "  <!-- loopx:todo todo_id=todo_monitor_frontier role=agent status=open "
+            "priority=P1 task_class=continuous_monitor claimed_by=existing-agent "
+            "action_kind=monitor target_key=release-window -->\n",
+        )
+
+        monitor = _run_guided_takeover(project, "existing-agent")
+        assert monitor["command_pack"].get("todo_delta") == "add_new"
+        assert monitor["command_pack"].get("existing_runnable_todo_id") is None
+        monitor_step_ids = [
+            step["id"] for step in monitor["guided_transaction"]["ordered_steps"]
+        ]
+        assert "continue_existing_frontier" not in monitor_step_ids, monitor_step_ids
+        assert "plan_ranked_todos" in monitor_step_ids, monitor_step_ids
+        assert "write_ordered_todos" in monitor_step_ids, monitor_step_ids
+
+
 def test_start_goal_guided_reuse_scans_beyond_default_item_cap() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp) / "capped-frontier-project"
@@ -1017,6 +1039,7 @@ def main() -> int:
     test_start_goal_guided_derives_display_name_from_goal_text()
     test_start_goal_guided_reuses_existing_agent_runnable_frontier()
     test_start_goal_guided_skips_blocked_agent_frontier()
+    test_start_goal_guided_skips_continuous_monitor_frontier()
     test_start_goal_guided_reuse_scans_beyond_default_item_cap()
     print("bootstrap command pack smoke passed")
     return 0

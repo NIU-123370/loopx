@@ -31,6 +31,12 @@ def shell_arg(value: str) -> str:
     return shlex.quote(value)
 
 
+def render_optional_cli_arg(flag: str, value: str | None) -> str:
+    if not value:
+        return ""
+    return f" {flag} {shell_arg(value)}"
+
+
 def render_cli_command_prefix(
     *,
     cli_bin: str = "loopx",
@@ -40,6 +46,36 @@ def render_cli_command_prefix(
     if runtime_root is not None:
         prefix += f" --runtime-root {shell_arg(str(runtime_root))}"
     return prefix
+
+
+def render_goal_start_bootstrap_command(
+    *,
+    project: str,
+    goal_id: str,
+    goal_text: str | None,
+    cli_bin: str,
+    runtime_root: str | None,
+    fine_grained: bool,
+    display_name: str | None = None,
+) -> str:
+    objective = goal_text or "<exact /loopx goal text>"
+    lines = [
+        f"cd {shell_arg(project)}",
+        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} bootstrap \\",
+        "  --project . \\",
+        f"  --goal-id {shell_arg(goal_id)} \\",
+        f"  --objective {shell_arg(objective)} \\",
+        f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
+        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)} \\",
+        "  --no-onboarding-scan \\",
+        "  --codex-app-heartbeat ask",
+    ]
+    if display_name:
+        lines.insert(-1, f"  --display-name {shell_arg(display_name)} \\")
+    if fine_grained:
+        lines[-1] += " \\"
+        lines.append("  --fine-grained")
+    return "\n".join(lines)
 
 
 def render_register_agent_command(

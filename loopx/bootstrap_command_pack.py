@@ -14,13 +14,10 @@ from .capabilities.issue_fix.workflow_plan import (
     build_issue_fix_goal_command_templates,
 )
 from .control_plane.effect_program import effect_program_from_ordered_steps
+from .control_plane.goals import existing_agent_frontier
 from .control_plane.goals.start_contract import (
     build_goal_start_contract,
     build_goal_start_prompt,
-)
-from .control_plane.goals.existing_agent_frontier import (
-    build_goal_todo_frontier_steps,
-    existing_runnable_todo_for_agent,
 )
 from .control_plane.scheduler.execution_context import (
     GUIDED_START_TURN_RUNTIME_PROFILES,
@@ -36,6 +33,8 @@ from .project_prompt import (
     DEFAULT_HANDOFF_ADAPTER_STATUS,
     render_available_capability_args,
     render_cli_command_prefix,
+    render_goal_start_bootstrap_command,
+    render_optional_cli_arg,
     render_quota_guard_command,
     render_refresh_state_command,
     shell_arg,
@@ -233,11 +232,7 @@ def _start_goal_command(
             else ""
         )
         + f" --goal-text {shell_arg(goal_text)}"
-        + (
-            f" --display-name {shell_arg(display_name)}"
-            if display_name
-            else ""
-        )
+        + render_optional_cli_arg("--display-name", display_name)
         + (" --include-command-pack-detail" if include_command_pack_detail else "")
     )
 
@@ -388,11 +383,7 @@ def build_start_goal_host_surface_selection_packet(
                 else ""
             )
             + f" --goal-text {shell_arg(normalized_goal_text)}"
-            + (
-                f" --display-name {shell_arg(display_name)}"
-                if display_name
-                else ""
-            )
+            + render_optional_cli_arg("--display-name", display_name)
             + (" --include-command-pack-detail" if include_command_pack_detail else "")
         )
         choices.append(
@@ -694,36 +685,6 @@ def _project_command(project: str, command: str) -> str:
     return "\n".join([f"cd {shell_arg(project)}", command])
 
 
-def _goal_start_bootstrap_command(
-    *,
-    project: str,
-    goal_id: str,
-    goal_text: str | None,
-    cli_bin: str,
-    runtime_root: str | None,
-    fine_grained: bool,
-    display_name: str | None = None,
-) -> str:
-    objective = goal_text or "<exact /loopx goal text>"
-    lines = [
-        f"cd {shell_arg(project)}",
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} bootstrap \\",
-        "  --project . \\",
-        f"  --goal-id {shell_arg(goal_id)} \\",
-        f"  --objective {shell_arg(objective)} \\",
-        f"  --adapter-kind {shell_arg(DEFAULT_HANDOFF_ADAPTER_KIND)} \\",
-        f"  --adapter-status {shell_arg(DEFAULT_HANDOFF_ADAPTER_STATUS)} \\",
-        "  --no-onboarding-scan \\",
-        "  --codex-app-heartbeat ask",
-    ]
-    if display_name:
-        lines.insert(-1, f"  --display-name {shell_arg(display_name)} \\")
-    if fine_grained:
-        lines[-1] += " \\"
-        lines.append("  --fine-grained")
-    return "\n".join(lines)
-
-
 def _selected_goal_capability_route(
     capability_route: str | None,
 ) -> dict[str, Any] | None:
@@ -877,16 +838,9 @@ def build_loopx_bootstrap_command_pack(
     thread_binding_projection = {"status": thread_binding.get("status")}
     if thread_binding.get("agent_id"):
         thread_binding_projection["agent_id"] = thread_binding["agent_id"]
-    existing_runnable_todo = existing_runnable_todo_for_agent(
-        project=Path(resolved_project),
-        goal=registry_goal,
-        state_file=str(inspection.get("state_file") or ""),
+    todo_frontier = existing_agent_frontier.existing_agent_frontier_projection(
+        project=Path(resolved_project), goal=registry_goal, inspection=inspection,
         agent_id=str(selected_agent_id) if selected_agent_id else None,
-    )
-    todo_delta = (
-        "reuse_existing"
-        if existing_runnable_todo
-        else "add_new"
     )
     issue_fix_commands = build_issue_fix_goal_command_templates(
         cli_bin=cli_bin,
@@ -925,7 +879,7 @@ def build_loopx_bootstrap_command_pack(
         runtime_root=command_runtime_root,
     )
     status_command = _project_command(resolved_project, f"{command_prefix} status")
-    goal_start_bootstrap_command = _goal_start_bootstrap_command(
+    goal_start_bootstrap_command = render_goal_start_bootstrap_command(
         project=resolved_project,
         goal_id=resolved_goal_id,
         goal_text=normalized_goal_text,
@@ -1013,22 +967,12 @@ def build_loopx_bootstrap_command_pack(
                 if normalized_goal_text
                 else ""
             )
-            + (
-                f" --display-name {shell_arg(display_name)}"
-                if display_name
-                else ""
-            )
+            + render_optional_cli_arg("--display-name", display_name)
         ),
         "read_only": True,
         "goal_text": normalized_goal_text,
         "display_name": display_name,
-        "todo_delta": todo_delta,
-        "existing_runnable_todo_id": (
-            str(existing_runnable_todo.get("todo_id"))
-            if isinstance(existing_runnable_todo, dict)
-            and existing_runnable_todo.get("todo_id")
-            else None
-        ),
+        **todo_frontier,
         "project": resolved_project,
         "goal_id": resolved_goal_id,
         "agent_id": selected_agent_id,
@@ -1614,7 +1558,7 @@ def build_start_goal_guided_packet(
             },
             *bind_thread_steps,
             *fine_mode_steps,
-            *build_goal_todo_frontier_steps(
+            *existing_agent_frontier.build_goal_todo_frontier_steps(
                 command_pack=command_pack,
                 commands=commands,
                 cli_bin=cli_bin,

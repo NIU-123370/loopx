@@ -7,9 +7,11 @@ from ...project_prompt import render_cli_command_prefix, shell_arg
 from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.contract import (
     TODO_STATUS_BLOCKED,
+    TODO_TASK_CLASS_ADVANCEMENT,
     normalize_todo_claimed_by,
     normalize_todo_status,
 )
+from ..todos.projection import todo_item_task_class
 
 
 def existing_runnable_todo_for_agent(
@@ -41,9 +43,31 @@ def existing_runnable_todo_for_agent(
             continue
         if normalize_todo_status(item.get("status")) == TODO_STATUS_BLOCKED:
             continue
+        if todo_item_task_class(item) != TODO_TASK_CLASS_ADVANCEMENT:
+            continue
         if normalize_todo_claimed_by(item.get("claimed_by")) == agent_id:
             return item
     return None
+
+
+def existing_agent_frontier_projection(
+    *,
+    project: Path,
+    goal: dict[str, Any],
+    inspection: dict[str, Any],
+    agent_id: str | None,
+) -> dict[str, Any]:
+    todo = existing_runnable_todo_for_agent(
+        project=project,
+        goal=goal,
+        state_file=str(inspection.get("state_file") or ""),
+        agent_id=agent_id,
+    )
+    todo_id = todo.get("todo_id") if isinstance(todo, dict) else None
+    return {
+        "todo_delta": "reuse_existing" if todo else "add_new",
+        "existing_runnable_todo_id": str(todo_id) if todo_id else None,
+    }
 
 
 def build_goal_todo_frontier_steps(
