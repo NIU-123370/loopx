@@ -14,10 +14,14 @@ from .capabilities.issue_fix.workflow_plan import (
     build_issue_fix_goal_command_templates,
 )
 from .control_plane.effect_program import effect_program_from_ordered_steps
-from .control_plane.goals import existing_agent_frontier
 from .control_plane.goals.start_contract import (
     build_goal_start_contract,
     build_goal_start_prompt,
+)
+from .control_plane.goals.start_goal_todo_delta import (
+    append_todo_delta_render_line,
+    existing_runnable_agent_frontier,
+    todo_authoring_steps,
 )
 from .control_plane.scheduler.execution_context import (
     GUIDED_START_TURN_RUNTIME_PROFILES,
@@ -298,8 +302,6 @@ def _guided_command_pack_projection(
         "host_loop_activation": command_pack.get("host_loop_activation"),
         "safety_contract": command_pack.get("safety_contract"),
         "detail_command": detail_command,
-        "todo_delta": command_pack.get("todo_delta"),
-        "existing_runnable_todo_id": command_pack.get("existing_runnable_todo_id"),
     }
     projection["packet_summary"] = _build_packet_summary(
         projection,
@@ -838,10 +840,6 @@ def build_loopx_bootstrap_command_pack(
     thread_binding_projection = {"status": thread_binding.get("status")}
     if thread_binding.get("agent_id"):
         thread_binding_projection["agent_id"] = thread_binding["agent_id"]
-    todo_frontier = existing_agent_frontier.existing_agent_frontier_projection(
-        project=Path(resolved_project), goal=registry_goal, inspection=inspection,
-        agent_id=str(selected_agent_id) if selected_agent_id else None,
-    )
     issue_fix_commands = build_issue_fix_goal_command_templates(
         cli_bin=cli_bin,
         goal_id=resolved_goal_id,
@@ -972,7 +970,6 @@ def build_loopx_bootstrap_command_pack(
         "read_only": True,
         "goal_text": normalized_goal_text,
         "display_name": display_name,
-        **todo_frontier,
         "project": resolved_project,
         "goal_id": resolved_goal_id,
         "agent_id": selected_agent_id,
@@ -1524,6 +1521,17 @@ def build_start_goal_guided_packet(
         if fine_grained
         else []
     )
+    project_connection = command_pack.get("project_connection")
+    guided_frontier = (
+        existing_runnable_agent_frontier(
+            project_connection,
+            resolved_goal_id=str(command_pack.get("goal_id") or ""),
+            effective_agent_id=str(command_pack.get("agent_id") or "") or None,
+        )
+        if isinstance(project_connection, dict)
+        and not isinstance(identity_selection_gate, dict)
+        else None
+    )
     guided_transaction = {
         "schema_version": GUIDED_START_SCHEMA_VERSION,
         "mode": "dry_run_preview",
@@ -1558,11 +1566,14 @@ def build_start_goal_guided_packet(
             },
             *bind_thread_steps,
             *fine_mode_steps,
-            *existing_agent_frontier.build_goal_todo_frontier_steps(
-                command_pack=command_pack,
-                commands=commands,
-                cli_bin=cli_bin,
+            *todo_authoring_steps(
+                existing_runnable_frontier=guided_frontier,
+                plan_prompt=commands.get("goal_start_plan_prompt"),
                 fine_grained=fine_grained,
+                cli_bin=cli_bin,
+                runtime_root=command_pack.get("command_runtime_root"),
+                goal_id=str(command_pack.get("goal_id") or ""),
+                agent_id=command_pack.get("agent_id"),
             ),
             {
                 "id": "refresh_state",
@@ -1818,6 +1829,7 @@ def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
             continue
         step_label = f"{index}. `{step.step_id}` ({step.kind}): "
         step_lines.append(step_label + str(step.purpose))
+        append_todo_delta_render_line(raw_step, step_lines)
         if command:
             rendered_command = (
                 actionable_shell_command(command)

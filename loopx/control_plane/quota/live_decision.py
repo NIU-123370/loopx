@@ -11,8 +11,11 @@ from ..capability_hooks import (
     dispatch_interaction_projection_hooks,
 )
 from .settlement import (
-    receipt_bound_monitor_settlement_phase,
-    receipt_bound_replay_settlement_phase,
+    read_heartbeat_settlement,
+)
+from ..work_items.interaction_contract import (
+    build_interaction_contract,
+    build_protocol_action_packet,
 )
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
@@ -22,6 +25,82 @@ from ..scheduler.execution_context import (
 
 HostObservationResolver = Callable[..., Mapping[str, Any]]
 BoundedResearchFrontierProjector = Callable[..., Mapping[str, Any] | None]
+
+
+def _apply_pending_capability_intent_precedence(
+    payload: dict[str, Any],
+    projection: Mapping[str, Any] | None,
+    *,
+    available_capabilities: Any = None,
+    scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
+    turn_instance_id: str | None = None,
+) -> None:
+    """Wake one governed local capability action ahead of quiet/terminal routes."""
+
+    if not isinstance(projection, Mapping) or projection.get("state") != "pending":
+        return
+    summary = str(projection.get("action_summary") or "").strip()
+    command = str(projection.get("command") or "").strip()
+    if not summary or not command:
+        return
+    payload.update(
+        {
+            "decision": "run",
+            "should_run": True,
+            "state": "eligible",
+            "effective_action": "governed_capability_intent",
+            "actionable_by_codex": True,
+            "normal_delivery_allowed": False,
+            "recovery_delivery_allowed": False,
+            "capability_intent_execution_allowed": True,
+            "reason": "a validated pending capability intent requires governed local execution",
+            "recommended_action": summary,
+            "pending_capability_intent": dict(projection),
+        }
+    )
+    payload["heartbeat_recommendation"] = {
+        "source": "pending_capability_intent",
+        "recommended_mode": "governed_capability_intent",
+        "notify": "DONT_NOTIFY",
+        "spend_policy": "intent consumption owns its durable receipt; no external delivery",
+        "reason": summary,
+        "agent_must_attempt": True,
+    }
+    payload["execution_obligation"] = {
+        "must_attempt_work": True,
+        "kind": "pending_capability_intent",
+        "contract": "governed_capability_intent",
+        "contract_obligation": "execute_exact_projected_command",
+        "notify_is_execution_gate": False,
+        "reason": summary,
+    }
+    payload["work_lane_contract"] = {
+        "schema_version": "work_lane_contract_v1",
+        "lane": "capability_intent",
+        "next_lane": "user_gate",
+        "obligation": "execute_exact_projected_command",
+        "must_attempt_work": True,
+        "reason_codes": ["pending_capability_intent"],
+        "monitor_policy": "not_applicable",
+        "action": summary,
+    }
+    payload["automation_liveness"] = {
+        "schema_version": "automation_liveness_v0",
+        "keep_active": True,
+        "pause_allowed": False,
+        "automation_action": "execute_bounded_work",
+        "reason": summary,
+        "spend_policy": "no external delivery; exact intent receipt is authoritative",
+    }
+    payload["interaction_contract"] = build_interaction_contract(
+        payload,
+        available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_execution_context,
+        turn_instance_id=turn_instance_id,
+    )
+    payload["protocol_action_packet"] = build_protocol_action_packet(payload)
 
 
 def bind_scheduler_followup_cli_routes(
@@ -199,20 +278,19 @@ def build_live_quota_should_run_decision(
                 **status_payload,
                 "bounded_research_frontier": dict(frontier),
             }
-    receipt_bound_monitor_phase = receipt_bound_monitor_settlement_phase(
+    settlement_readback = read_heartbeat_settlement(
         runtime_root,
         goal_id=goal_id,
         agent_id=agent_id,
         todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
-    )
-    receipt_bound_replay_phase = receipt_bound_replay_settlement_phase(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        todo_id=receipt_bound_todo_id,
         replan_obligation_id=receipt_bound_replan_obligation_id,
-        turn_instance_id=turn_instance_id,
+    )
+    receipt_bound_monitor_phase = (
+        settlement_readback.monitor_phase if settlement_readback else None
+    )
+    receipt_bound_replay_phase = (
+        settlement_readback.replay_phase if settlement_readback else None
     )
     payload = build_quota_should_run(
         decision_status_payload,
@@ -233,10 +311,17 @@ def build_live_quota_should_run_decision(
         turn_instance_id=turn_instance_id,
     )
     hook_dispatch = dispatch_interaction_projection_hooks(interaction_projection_hooks)
-    interaction = payload.get("interaction_contract")
-    if isinstance(interaction, dict):
-        projections = hook_dispatch["projections"]
-        if isinstance(projections, Mapping):
+    projections = hook_dispatch["projections"]
+    if isinstance(projections, Mapping):
+        _apply_pending_capability_intent_precedence(
+            payload,
+            projections.get("pending_capability_intent"),
+            available_capabilities=available_capabilities,
+            scheduler_execution_context=resolved_context,
+            turn_instance_id=turn_instance_id,
+        )
+        interaction = payload.get("interaction_contract")
+        if isinstance(interaction, dict):
             interaction.update(projections)
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {

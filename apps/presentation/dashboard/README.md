@@ -126,9 +126,18 @@ From any directory after installing LoopX:
 loopx dashboard
 ```
 
-This command installs the dashboard's npm dependencies on first run, then
-starts the Vite UI together with the loopback status and Chat services. Open
-`http://127.0.0.1:5173/` after the readiness messages appear.
+This one command serves the packaged Personal Workspace, status projection, and
+Agent Chat from the same process. It opens the browser by default. For a
+headless launch, run `loopx dashboard --no-open` and open the URL printed by the
+command; the default is `http://127.0.0.1:8767/chat/`. Installed use does not
+require a separate `loopx serve-status` process or npm dependency installation.
+
+The packaged UI and status projection can be read back from that same process:
+
+```bash
+curl -fsS http://127.0.0.1:8767/chat/ >/dev/null
+curl -fsS http://127.0.0.1:8767/status.json
+```
 
 If a LoopX Chat service is already running on the default port (for example
 started by the Tauri desktop shell), `loopx dashboard` detects it by its exact
@@ -137,8 +146,7 @@ URL and opens the browser/PWA route, then exits without starting a second
 server. The desktop shell reuses the same services in the opposite order, so
 the browser/PWA and native entry points can be started in either order.
 
-The equivalent source-checkout command remains available for dashboard
-development:
+Source-checkout development is a separate mode:
 
 ```bash
 npm ci

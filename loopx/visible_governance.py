@@ -42,14 +42,15 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
             ),
             "shipped": False,
             "shipped_equivalent": (
-                "task_lease.py file-backed leases (runtime) + "
-                "ACTIVE_GOAL_STATE.md soft claims (Markdown) -- two "
-                "separate paths, not one canonical aggregate"
+                "Default runtime: task_lease.py file-backed leases + "
+                "ACTIVE_GOAL_STATE.md soft claims (two stores). Stage-2 "
+                "coordination head unifies them only on the additive path."
             ),
             "gap": (
-                "Lease and claim state live in separate stores with no "
-                "shared revision counter; soft claim silently invalidates "
-                "hard lease in legacy handoff_mode"
+                "Default path still has separate lease/claim stores with no "
+                "shared revision counter; legacy handoff_mode keeps soft "
+                "claim overriding hard lease. Canonical shared state waits "
+                "on Stage 3 promotion."
             ),
         },
         {
@@ -59,16 +60,17 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
                 "authority_revision, todo_revision, lease_epoch, "
                 "receipt_index, eligibility projections"
             ),
-            "shipped": False,
+            "shipped": True,
             "shipped_equivalent": (
-                "loopx.control_plane.coordination head codec + file/NoKV "
-                "providers behind one CAS seam -- coverage-only modules, "
-                "not the runtime source of truth"
+                "Stage-2 additive: loopx.control_plane.coordination.head "
+                "codec + file_provider CAS (+ NoKV candidate shadow). Not "
+                "the default runtime write path."
             ),
             "gap": (
-                "Runtime still writes Markdown/lease files; no production "
-                "coordination head document exists, and canonical promotion "
-                "waits on the Stage 3 gates"
+                "Default runtime still writes Markdown/lease files; the "
+                "coordination head is an additive Stage-2 shadow. Stage 3 "
+                "canonical promotion, renew/release/HA, and multi-node "
+                "remain open."
             ),
         },
         {
@@ -77,16 +79,19 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
                 "CAS claim+lease+receipt in one atomic transition against "
                 "the coordination head"
             ),
-            "shipped": False,
+            "shipped": True,
             "shipped_equivalent": (
-                "task_lease.py acquire_task_lease (hard fence, file CAS) + "
-                "active state claimed_by field (soft claim) -- two separate "
-                "paths with independent versioning"
+                "Stage-2 additive: coordination.executor claim_work "
+                "(lease acquire then hard-lease-gated claim) over "
+                "file_provider CAS with receipt_index; also "
+                "task_lease_acquire.ts native hard-fence transaction + "
+                "active-state claimed_by soft claim on the default path."
             ),
             "gap": (
-                "Lease does not carry execution authority alone; "
-                "soft claim wins on divergence in legacy handoff_mode. No "
-                "atomic claim+lease+receipt CAS exists in production."
+                "claim_work is not the default production write path. "
+                "Leases remain an optional runtime fence, not write "
+                "authority. Soft claim still wins under legacy "
+                "handoff_mode on the default path."
             ),
         },
         {
@@ -94,15 +99,17 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
             "proposal": (
                 "retain_all_v0: no GC; missing receipt -> fail closed"
             ),
-            "shipped": False,
+            "shipped": True,
             "shipped_equivalent": (
-                "Heartbeat receipt at quota guard time + settlement "
-                "verification chain in quota/settlement.py -- turn-scoped, "
-                "not goal-wide"
+                "Stage-2 coordination head receipt_index under "
+                "retain_all_v0 (fail closed on missing receipt for that "
+                "path). Default runtime still uses turn-scoped quota "
+                "settlement receipts."
             ),
             "gap": (
-                "Turn-scoped settlement receipts are not equivalent to "
-                "goal-wide operation receipts; no receipt_index exists"
+                "Default path has no goal-wide receipt_index. Stage-2 "
+                "retain_all_v0 is load-bearing for canary sizing; Section 12 "
+                "retention policy is still an open Stage-3 decision."
             ),
         },
         {
@@ -115,11 +122,13 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
             "shipped_equivalent": (
                 "Default local mode only -- project registry, Markdown "
                 "active state, run history, task leases, status, quota, "
-                "host behavior remain unchanged"
+                "host behavior remain unchanged. Stage-2 file provider is "
+                "local shadow, not shared-authority mode."
             ),
             "gap": (
                 "No shared-authority mode is implemented; installing a "
-                "provider does not enable shared authority"
+                "provider does not enable shared authority or replace "
+                "local writers"
             ),
         },
         {
@@ -128,15 +137,16 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
                 "handoff_mode field on goal state front matter: "
                 "legacy | soft_claim | hard_lease"
             ),
-            "shipped": False,
+            "shipped": True,
             "shipped_equivalent": (
-                "Legacy mode only -- soft claims can override active hard "
-                "leases today (divergence hole)"
+                "handoff_mode front-matter + loopx handoff-mode show|set "
+                "with quiescence gate; hard_lease gates claim/lease and "
+                "auto-acquire completion keys. Stage-2 head pins "
+                "hard_lease on bootstrap."
             ),
             "gap": (
-                "handoff_mode is documented but not yet implemented; "
-                "mode switch requires quiescence (no open claims or "
-                "active leases)"
+                "legacy remains the default and keeps the soft-claim / "
+                "hard-lease divergence hole by design"
             ),
         },
         {
@@ -150,12 +160,12 @@ def _build_authority_boundary_table() -> list[dict[str, Any]]:
             ),
             "shipped": False,
             "shipped_equivalent": (
-                "No shared-mode path exists; all writes go to local file "
-                "system unconditionally"
+                "No shared-mode path exists; Stage-2 file provider is still "
+                "local. Default writes go to the local file system."
             ),
             "gap": (
-                "Offline boundary is purely aspirational -- no online "
-                "authority provider is wired"
+                "Shared-mode offline boundary is aspirational -- no online "
+                "authority provider is the runtime source of truth"
             ),
         },
     ]
@@ -661,10 +671,11 @@ def render_visible_governance_markdown(slice_payload: dict[str, Any]) -> str:
         f"{len(boundary) if boundary else 0}"
     )
     lines.append(
-        "- **Key takeaway**: RFC authority model is a proposal; "
-        "the shipped runtime uses file-backed task leases, Markdown soft "
-        "claims, turn-scoped settlement receipts, and registry coordination "
-        "fields. No unified coordination head exists in production."
+        "- **Key takeaway**: Stage-2 ships an additive coordination head, "
+        "file provider, and claim_work executor plus handoff_mode; default "
+        "runtime still uses Markdown soft claims, file-backed task leases "
+        "(optional fence, not write authority), and turn-scoped settlement. "
+        "Shared-mode promotion remains Stage 3."
     )
     lines.append("")
 

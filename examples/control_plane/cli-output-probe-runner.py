@@ -99,6 +99,11 @@ def _receipt_row(
             if isinstance(payload, dict)
             else []
         ),
+        "guided_todo_delta_schema_versions": (
+            semantics.guided_todo_delta_schema_versions(payload)
+            if isinstance(payload, dict)
+            else []
+        ),
     }
 
 

@@ -17,7 +17,7 @@ from ..chat_server import (
     serve_chat,
 )
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
-from ..dashboard_launcher import launch_dashboard
+from ..dashboard_launcher import launch_dashboard, replace_existing_loopx_chat
 from ..execution_profile import execution_profile_turn_granularity
 from ..heartbeat_prequota import (
     render_heartbeat_pre_quota_markdown,
@@ -374,6 +374,11 @@ def register_support_control_commands(
         "--no-open",
         action="store_true",
         help="Start the local server without opening a browser.",
+    )
+    chat_parser.add_argument(
+        "--replace-existing-loopx-chat",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     chat_parser.add_argument(
         "--verbose", action="store_true", help="Print HTTP request logs."
@@ -906,6 +911,8 @@ def handle_support_control_command(
             scan_roots = [Path(item).expanduser() for item in args.scan_path]
             if not scan_roots:
                 scan_roots = [Path(args.scan_root).expanduser()]
+            if bool(getattr(args, "replace_existing_loopx_chat", False)):
+                replace_existing_loopx_chat(args.host, args.port)
             serve_chat(
                 registry_path=chat_registry_path,
                 runtime_root_override=args.runtime_root,

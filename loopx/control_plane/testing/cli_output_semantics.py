@@ -114,5 +114,9 @@ def planning_inventory_detail_schema_versions(value: Any) -> list[str]:
     return _schema_versions_for_key(value, "agent_todo_planning_inventory")
 
 
+def guided_todo_delta_schema_versions(value: Any) -> list[str]:
+    return _schema_versions_for_key(value, "todo_delta")
+
+
 def markdown_headings(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if _MARKDOWN_HEADING.match(line)]

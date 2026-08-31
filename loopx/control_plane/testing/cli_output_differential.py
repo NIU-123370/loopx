@@ -19,6 +19,7 @@ ACTION_PORTFOLIO_SCHEMA_VERSION_V0 = "quota_action_portfolio_v0"
 ACTION_PORTFOLIO_SCHEMA_VERSION_V1 = "quota_action_portfolio_v1"
 ACTION_PORTFOLIO_SCHEMA_VERSION_V2 = "quota_action_portfolio_v2"
 PLANNING_HORIZON_SCHEMA_VERSION_V0 = "quota_planning_horizon_v0"
+GUIDED_TODO_DELTA_SCHEMA_VERSION_V0 = "loopx_guided_todo_delta_v0"
 PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0 = (
     "todo_planning_inventory_detail_v0"
 )
@@ -140,6 +141,19 @@ _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
     "compact_payload_chars": 1_024,
 }
 
+# loopx_guided_todo_delta_v0 adds the continuation-aware Todo authoring
+# decision contract (reuse/update/link_successor/add_new plus a bounded
+# runnable-frontier summary) to the guided start-goal packet when an
+# existing-Agent takeover is projected. The allowance is bound to the
+# declared none-to-v0 schema migration; after merge the ordinary
+# start_goal_guided growth budgets apply again.
+_GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
+    "chars": 512,
+    "utf8_bytes": 512,
+    "lines": 16,
+    "compact_payload_chars": 448,
+}
+
 
 def _rows_by_id(receipt: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if receipt.get("schema_version") != CLI_OUTPUT_PROBE_SCHEMA_VERSION:
@@ -246,6 +260,20 @@ def _planning_horizon_schema_migration(
     return None
 
 
+def _guided_todo_delta_schema_migration(
+    base: dict[str, Any], candidate: dict[str, Any]
+) -> str | None:
+    base_versions = tuple(base.get("guided_todo_delta_schema_versions") or [])
+    candidate_versions = tuple(
+        candidate.get("guided_todo_delta_schema_versions") or []
+    )
+    if base_versions == () and candidate_versions == (
+        GUIDED_TODO_DELTA_SCHEMA_VERSION_V0,
+    ):
+        return f"none -> {GUIDED_TODO_DELTA_SCHEMA_VERSION_V0}"
+    return None
+
+
 def _planning_inventory_detail_schema_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
@@ -338,6 +366,18 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
     inventory_detail_growth_migration = bool(
         output_format == "json" and inventory_detail_schema_migration
     )
+    guided_todo_delta_schema_changed = (
+        tuple(base.get("guided_todo_delta_schema_versions") or [])
+        != tuple(candidate.get("guided_todo_delta_schema_versions") or [])
+    )
+    guided_todo_delta_schema_migration = (
+        _guided_todo_delta_schema_migration(base, candidate)
+        if guided_todo_delta_schema_changed
+        else None
+    )
+    guided_todo_delta_growth_migration = bool(
+        output_format == "json" and guided_todo_delta_schema_migration
+    )
 
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
@@ -371,6 +411,11 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE[
                     metric
                 ],
+            )
+        if guided_todo_delta_growth_migration:
+            allowance = max(
+                allowance,
+                _GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
             )
         deltas[metric] = delta
         allowances[metric] = allowance
@@ -422,6 +467,14 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             review_signals.append(
                 "planning inventory detail schema migrated: "
                 f"{inventory_detail_schema_migration}"
+            )
+    if guided_todo_delta_schema_changed:
+        if guided_todo_delta_schema_migration is None:
+            failures.append("guided todo delta schema coverage changed")
+        else:
+            review_signals.append(
+                "guided todo delta schema migrated: "
+                f"{guided_todo_delta_schema_migration}"
             )
 
     return {

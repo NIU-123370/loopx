@@ -15,6 +15,7 @@ from loopx.control_plane.testing.cli_output_differential import (
 from loopx.control_plane.testing.cli_output_semantics import (
     action_portfolio_schema_versions,
     action_signature_coverages,
+    guided_todo_delta_schema_versions,
     planning_horizon_schema_versions,
     planning_inventory_detail_schema_versions,
 )
@@ -40,6 +41,7 @@ def _row(**overrides: object) -> dict[str, object]:
         "action_signature_coverages": ["turn_envelope_action_dimensions_v0"],
         "action_portfolio_schema_versions": [],
         "planning_horizon_schema_versions": [],
+        "guided_todo_delta_schema_versions": [],
         "planning_inventory_detail_schema_versions": [],
     }
     row.update(overrides)
@@ -145,6 +147,17 @@ def test_measurement_records_semantic_shape_without_runtime_hash_noise() -> None
             },
         }
     ) == ["todo_planning_inventory_detail_v0"]
+    assert guided_todo_delta_schema_versions(
+        {
+            "steps": [
+                {
+                    "todo_delta": {
+                        "schema_version": "loopx_guided_todo_delta_v0"
+                    }
+                }
+            ]
+        }
+    ) == ["loopx_guided_todo_delta_v0"]
 
     with_observability_field = json.loads(payload("third-runtime", "third-source"))
     with_observability_field["action_signature"]["diagnostic_note"] = "new"
@@ -325,6 +338,47 @@ def test_quota_action_portfolio_v2_context_migration_is_declared() -> None:
     assert result["rows"][0]["review_signals"] == [
         "action_portfolio schema migrated: quota_action_portfolio_v1 -> "
         "quota_action_portfolio_v2"
+    ]
+
+
+def test_guided_todo_delta_schema_migration_requires_review() -> None:
+    candidate = _row(
+        guided_todo_delta_schema_versions=["loopx_guided_todo_delta_v0"],
+    )
+
+    result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
+
+    assert result["ok"] is True
+    assert result["review_required"] is True
+    assert result["rows"][0]["review_signals"] == [
+        "guided todo delta schema migrated: none -> loopx_guided_todo_delta_v0"
+    ]
+
+
+def test_guided_todo_delta_migration_still_fails_above_bounded_growth() -> None:
+    candidate = _row(
+        guided_todo_delta_schema_versions=["loopx_guided_todo_delta_v0"],
+        chars=40_513,
+    )
+
+    result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
+
+    assert result["ok"] is False
+    assert "chars grew by 513; allowance is 512" in (
+        result["rows"][0]["failures"]
+    )
+
+
+def test_unknown_guided_todo_delta_schema_migration_fails_closed() -> None:
+    candidate = _row(
+        guided_todo_delta_schema_versions=["loopx_guided_todo_delta_v1"],
+    )
+
+    result = compare_cli_output_receipts(_receipt(_row()), _receipt(candidate))
+
+    assert result["ok"] is False
+    assert result["rows"][0]["failures"] == [
+        "guided todo delta schema coverage changed"
     ]
 
 
