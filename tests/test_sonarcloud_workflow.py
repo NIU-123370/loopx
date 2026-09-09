@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "sonarcloud.yml"
 
@@ -24,9 +25,7 @@ def test_missing_sonar_token_reaches_a_successful_skip_step() -> None:
     assert "non-blocking analysis skipped" in workflow
 
 
-def test_sonar_steps_remain_guarded_by_the_token() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-
+def _assert_token_guards(workflow: str) -> None:
     sensitive_actions = (
         "uses: actions/checkout@",
         "uses: actions/download-artifact@",
@@ -40,8 +39,25 @@ def test_sonar_steps_remain_guarded_by_the_token() -> None:
             "if: steps.sonar-token.outputs.available == 'true'" in step
             for step in matching_steps
         )
+
+
+def test_sonar_steps_remain_guarded_by_the_token() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    _assert_token_guards(workflow)
     assert workflow.count("SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}") == 2
     assert "\n    env:\n      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}" not in workflow
+
+
+def test_each_missing_analysis_guard_is_rejected() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    guard = "        if: steps.sonar-token.outputs.available == 'true'\n"
+    fragments = workflow.split(guard)
+    assert len(fragments) > 1
+    for index in range(len(fragments) - 1):
+        mutant = guard.join(fragments[:index + 1]) + guard.join(fragments[index + 1:])
+        with pytest.raises(AssertionError):
+            _assert_token_guards(mutant)
 
 
 def test_sonar_reuses_same_run_coverage_without_a_privileged_trigger() -> None:

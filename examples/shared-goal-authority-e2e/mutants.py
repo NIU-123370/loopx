@@ -47,6 +47,13 @@ class Case:
 
 
 CASES = [
+    Case('delivery_wait_target_unbound', (('loopx/control_plane/todos/resume_condition.ts', replacement(
+        'condition.target_todo_id !== spec.target || ', '')),),
+         'tests/control_plane_ts/delivery_response.test.ts', 'exact dependency identity'),
+    Case('delivery_wait_unknown_class', (('loopx/control_plane/todos/resume_condition.ts', replacement(
+        '["advancement_task", "user_gate", "user_action", "blocker"].includes(String(condition.target_task_class))',
+        'true')),),
+         'tests/control_plane_ts/delivery_response.test.ts', 'exact dependency identity'),
     Case('rollout_cwd_root', (('loopx/cli_rollout.py', replacement(
         'resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path)',
         'resolve_runtime_root(registry, runtime_root_arg)')),),
@@ -203,11 +210,8 @@ CASES.extend([
          move_guard_outside_lock("require_registry_source_write_allowed")),),
          WRITER_TEST + "test_waiting_override_writer_rechecks_registry_binding_inside_shared_state_lock"),
     Case("remove_refresh_cas", (("loopx/state_refresh.py", replacement(
-        '''            if current_state_text != expected_write_state_text:
-                raise ValueError(
-                    "active goal state changed while refresh-state was qualifying "
-                    "its semantic writeback; retry from the current state"
-                )''', "")),),
+        "if current_state_text != expected_write_state_text:",
+        "if False:  # DELIBERATE MUTANT: bypass stale-state rejection.")),),
          WRITER_TEST + "test_concurrent_public_refresh_preserves_the_newer_owned_paragraph"),
     Case("fence_unshared_state_lock", ((COORDINATION + "legacy_writer_fence.ts", replacement(
         "withFileMutationLock(statePath, () =>",

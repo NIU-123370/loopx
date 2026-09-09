@@ -58,19 +58,20 @@ import {
   evaluateTodoCompletionFence,
 } from "./todos/completion_fence.ts";
 import {
-  buildTodoCompletionMetadataUpdates,
   normalizeTodoCompletionValue,
   requireTodoCompletionMetadataValue,
   selectTodoCompletionContinuation,
 } from "./todos/completion_state.ts";
 import { reduceTodoCompletionTransaction } from "./todos/completion_transaction.ts";
 import { transitionTodoNextAction } from "./todos/next_action.ts";
+import { planTodoFieldUpdate } from "./todos/field_update.ts";
 import {
   evaluateTodoResumeConditions,
   normalizeTodoResumeWhen,
   planTodoExternalWaitTransition,
 } from "./todos/resume_condition.ts";
 import { evaluateSchedulerStateTransition } from "./scheduler/state_transition_rules.ts";
+import { projectTodoResumePlanning } from "./todos/resume_planning.ts";
 import {
   evaluateSchedulerStateOperation,
   loadSchedulerState,
@@ -94,6 +95,8 @@ import {
   qualifyActionSelection,
 } from "./work_items/action_portfolio.ts";
 import { projectQuotaPlanningHorizon } from "./work_items/planning_horizon.ts";
+import { projectDeliveryHistory, projectDeliveryResponse } from "./work_items/delivery_history.ts";
+import { validateDeliveryClaim } from "./work_items/delivery_outcome.ts";
 import {
   evaluateTaskLeaseAcquireDecision,
   evaluateTaskLeaseWriteScopesOverlap,
@@ -127,7 +130,12 @@ import {
   terminalLifecycleLocalCoordinationTodo,
 } from "./coordination/local_authority_runtime.ts";
 import { evaluateCoordinationTodoClaimDecision } from "./coordination/todo_claim.ts";
-import { evaluateCoordinationTodoTerminalDecision } from "./coordination/todo_terminal_decision.ts";
+import {
+  evaluateCoordinationTodoTerminalDecision,
+  evaluateCoordinationTodoMutationDecision,
+  evaluateCoordinationTerminalFence,
+  evaluateTodoOwnershipGate,
+} from "./coordination/todo_lifecycle_decision.ts";
 import { evaluateCoordinationTodoArchiveSelection } from "./coordination/todo_archive_selection.ts";
 import { evaluateCoordinationTodoSuccessorDerivation } from "./coordination/todo_successor_derivation.ts";
 import {
@@ -359,7 +367,7 @@ export function createEffectRuntimeHandlers(
     ["todo.completion_state.normalize", normalizeTodoCompletionValue],
     ["todo.completion_state.require_metadata", requireTodoCompletionMetadataValue],
     ["todo.completion_state.continuation_for_write", selectTodoCompletionContinuation],
-    ["todo.completion_state.metadata_updates", buildTodoCompletionMetadataUpdates],
+    ["todo.field_update.plan", planTodoFieldUpdate],
     [
       "todo.claim.decide",
       (params) => evaluateCoordinationTodoClaimDecision(
@@ -380,12 +388,16 @@ export function createEffectRuntimeHandlers(
       ),
     ],
     ["todo.terminal.decide", evaluateCoordinationTodoTerminalDecision],
+    ["todo.mutation.decide", evaluateCoordinationTodoMutationDecision],
+    ["task_lease.terminal_fence.decide", evaluateCoordinationTerminalFence],
+    ["todo.ownership_gate.decide", evaluateTodoOwnershipGate],
     ["todo.archive.select", evaluateCoordinationTodoArchiveSelection],
     ["todo.successor.derive", evaluateCoordinationTodoSuccessorDerivation],
     ["todo.completion.reduce", reduceTodoCompletionTransaction],
     ["todo.next_action.transition", transitionTodoNextAction],
     ["todo.resume_condition.normalize", normalizeTodoResumeWhen],
     ["todo.resume_condition.evaluate", evaluateTodoResumeConditions],
+    ["todo.resume_planning.project", projectTodoResumePlanning],
     ["todo.external_wait.plan", planTodoExternalWaitTransition],
     ["scheduler.state_transition.evaluate", evaluateSchedulerStateTransition],
     ["scheduler.state.evaluate", evaluateSchedulerStateOperation],
@@ -398,6 +410,9 @@ export function createEffectRuntimeHandlers(
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],
     ["work_item.planning_inventory.detail", projectTodoPlanningInventoryDetail],
     ["work_item.refresh_recommendation.resolve", resolveRefreshRecommendation],
+    ["work_item.delivery_history.project", projectDeliveryHistory],
+    ["work_item.delivery_response.project", projectDeliveryResponse],
+    ["work_item.delivery_claim.validate", validateDeliveryClaim],
     ["goal.vision_checkpoint.evaluate", buildVisionCheckpoint],
     ["goal.vision_wait.coverage", projectVisionWaitCoverage],
     ["goal.shared_goal_alignment.project", projectSharedGoalAlignment],

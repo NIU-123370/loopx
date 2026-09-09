@@ -390,15 +390,79 @@ function conditionFor(
   return condition;
 }
 
-function resumeAvailabilityReason(condition: JsonObject): string {
-  if (condition.satisfied === true) return "resume_condition_satisfied";
-  if (
-    condition.invalid_target === true ||
-    typeof condition.invalid_state === "string"
-  ) {
-    return "resume_condition_invalid";
+export type ResumeConditionDiagnosis = {
+  kind: TodoResumeKind | null;
+} & (
+  | { state: "satisfied" | "pending" }
+  | { state: "invalid"; reason: string }
+);
+
+/** Shared by canonical evaluation and old compact projections. Missing source
+ * facts are not proof of an invalid dependency. A historical completed monitor
+ * remains satisfied; a live monitor completion wait requires an explicit replan,
+ * never an inferred monitor_changed generation baseline. */
+export function diagnoseTodoResumeCondition(
+  condition: JsonObject, waitingTodoId: string | null = null,
+): ResumeConditionDiagnosis {
+  const parsed = parseResumeWhen(condition.resume_when);
+  const kind = TODO_RESUME_KINDS.find((value) => value === condition.kind) ?? parsed?.kind ?? null;
+  const targetId = condition.target_todo_id ?? condition.target ?? parsed?.target;
+  if ((kind === "todo_done" || kind === "monitor_changed") && waitingTodoId && targetId === waitingTodoId) {
+    return { kind, state: "invalid", reason: "dependency_self_reference" };
   }
-  return "resume_condition_pending";
+  if (typeof condition.invalid_state === "string") {
+    return { kind, state: "invalid", reason: condition.invalid_state };
+  }
+  if (condition.invalid_target === true) return { kind, state: "invalid", reason: "invalid_target" };
+  if (kind === "todo_done" && condition.target_task_class === "continuous_monitor"
+    && condition.target_status && condition.target_status !== "done") {
+    return { kind, state: "invalid", reason: "monitor_completion_requires_replan" };
+  }
+  return { kind, state: condition.satisfied === true ? "satisfied" : "pending" };
+}
+
+function diagnosedCondition(condition: JsonObject, waitingTodoId: string): JsonObject {
+  const diagnosis = diagnoseTodoResumeCondition(condition, waitingTodoId);
+  return {
+    ...condition,
+    availability_reason: `resume_condition_${diagnosis.state}`,
+    ...(diagnosis.state === "invalid" ? { satisfied: false, invalid_state: diagnosis.reason } : {}),
+  };
+}
+
+/** Positive wait proof for consumers that may relax supervision. Historical
+ * absence of an invalid marker is not proof of a valid, identified target. */
+export function resumeConditionHasKnownPendingTarget(condition: JsonObject, waitingTodo: JsonObject): boolean {
+  const spec = parseResumeWhen(waitingTodo.resume_when);
+  if (!spec || condition.resume_when !== spec.normalized || condition.kind !== spec.kind
+    || (condition.target !== undefined && condition.target !== spec.target)) return false;
+  if (condition.schema_version !== "todo_resume_condition_v0" || condition.satisfied !== false
+    || diagnoseTodoResumeCondition(condition, String(waitingTodo.todo_id)).state !== "pending") return false;
+  if ((spec.kind === "todo_done" || spec.kind === "monitor_changed")
+    && (condition.target_todo_id !== spec.target || spec.target === waitingTodo.todo_id)) return false;
+  switch (spec.kind) {
+    case "todo_done":
+      return ["open", "deferred"].includes(String(condition.target_status))
+        && ["advancement_task", "user_gate", "user_action", "blocker"].includes(String(condition.target_task_class))
+        && (condition.target_archive_state === null || condition.target_archive_state === "active");
+    case "monitor_changed":
+      return condition.target_task_class === "continuous_monitor" && condition.target_status === "open"
+        && typeof condition.baseline_generation === "number" && Number.isSafeInteger(condition.baseline_generation)
+        && condition.baseline_generation >= 0 && condition.baseline_generation === waitingTodo.resume_monitor_generation
+        && typeof condition.material_change_generation === "number"
+        && Number.isSafeInteger(condition.material_change_generation) && condition.material_change_generation >= 0
+        && condition.material_change_generation <= condition.baseline_generation;
+    case "capacity_available": return condition.provider_required === false
+      && condition.provider === "runtime_available_capabilities" && condition.capability === spec.target;
+    case "pr_merged": {
+      const ref = normalizedPrRef(spec.target);
+      const repository = ref?.repo ?? githubRepository(waitingTodo.task_repository);
+      return ref !== null && repository !== null && condition.pr_repo === repository
+        && condition.pr_number === ref.number && condition.repository_binding_state !== "ambiguous"
+        && condition.repository_binding_source === (ref.repo ? "qualified_resume_when" : "task_repository");
+    }
+    default: return false;
+  }
 }
 
 export function evaluateTodoResumeConditions(value: unknown): JsonObject {
@@ -441,10 +505,9 @@ export function evaluateTodoResumeConditions(value: unknown): JsonObject {
       rolloutEvents,
       availableCapabilities,
     );
-    condition.availability_reason = resumeAvailabilityReason(condition);
     conditions.push({
       todo_id: item.todo_id,
-      condition,
+      condition: diagnosedCondition(condition, item.todo_id),
     });
   }
   return {

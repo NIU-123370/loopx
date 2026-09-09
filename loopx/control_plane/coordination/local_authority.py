@@ -13,7 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from ...agent_registry import registered_agent_ids_from_registry
-from ...state_refresh import now_local
+from ..runtime.time import now_local_iso as now_local
 from ..effect_runtime import effect_runtime_result
 from .coordination_state_contract import (
     TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
@@ -233,6 +233,23 @@ def read_canonical_todos_if_promoted(
     return payload
 
 
+def read_canonical_todo_fields_if_promoted(
+    *, runtime_root: Path, goal_id: str,
+    rollout_events: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Read one unbounded planning snapshot; None alone permits legacy parsing.
+
+    Empty canonical state is authoritative. Provider failures propagate; this
+    read neither repairs Markdown nor grants mutation/promotion authority.
+    Callers pass the same fields to all decisions in one planning operation.
+    """
+    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
+    return (
+        canonical_todo_summary_fields(canonical["todos"], rollout_events=rollout_events)
+        if canonical is not None else None
+    )
+
+
 def canonical_todo_summary_fields(
     todos: list[dict[str, Any]],
     *,
@@ -241,6 +258,7 @@ def canonical_todo_summary_fields(
     """Adapt canonical records into the existing Todo summary read model."""
 
     from ..todos.active_state_editing import TODO_SECTION_HEADINGS
+    from ..todos.decision_scope import build_standing_decision_authority
     from ..todos.todo_summary import compact_todo_group, count_advancement_todos
 
     native_archived = {
@@ -278,6 +296,7 @@ def canonical_todo_summary_fields(
             items,
             source_section=TODO_SECTION_HEADINGS[role],
             role=role,
+            include_empty_source=True,
             resume_source_items=todos,
             rollout_events=rollout_events,
             item_limit=None,
@@ -298,4 +317,8 @@ def canonical_todo_summary_fields(
                         int(summary.get("advancement_done_count") or 0) + archived_done
                     )
             fields[f"{role}_todos"] = summary
+        if role == "user":
+            standing_authority = build_standing_decision_authority(items)
+            if standing_authority:
+                fields["standing_decision_authority"] = standing_authority
     return fields
