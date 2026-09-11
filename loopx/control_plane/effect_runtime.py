@@ -32,6 +32,7 @@ STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
 _NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
+_IDLE_MS_RE = re.compile(r"[ \t\r\n\f\v]*([0-9]+)[ \t\r\n\f\v]*")
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
 
@@ -40,13 +41,13 @@ def _validate_effect_runtime_idle_ms(environment: Mapping[str, str]) -> int:
     raw = environment.get("LOOPX_EFFECT_RUNTIME_IDLE_MS")
     if raw is None:
         return DEFAULT_EFFECT_RUNTIME_IDLE_MS
-    normalized = raw.strip()
-    if not re.fullmatch(r"[0-9]+", normalized):
+    match = _IDLE_MS_RE.fullmatch(raw)
+    if match is None:
         raise EffectRuntimeStartupError(
             "LOOPX_EFFECT_RUNTIME_IDLE_MS must be a positive base-10 integer",
             diagnostic_code="invalid_runtime_idle_ms",
         )
-    parsed = int(normalized)
+    parsed = int(match.group(1))
     if not 1 <= parsed <= MAX_EFFECT_RUNTIME_IDLE_MS:
         raise EffectRuntimeStartupError(
             "LOOPX_EFFECT_RUNTIME_IDLE_MS must be between "
