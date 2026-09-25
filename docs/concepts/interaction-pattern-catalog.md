@@ -88,7 +88,7 @@ Map P0/P1 catalog rows to canary archetypes before picking commands:
 | --- | --- | --- | --- | --- | --- |
 | Work Routing | IP-001, IP-002, IP-003, IP-007, IP-008, IP-021, IP-029 | Hot-path route canary; Planning governance canary when cadence or repair is involved | `quota should-run`, `interaction_contract`, `work_lane_contract`, scheduler hint, handoff todo state | one eligible delivery fixture, one blocked/fallback fixture, one quiet or monitor fixture | agent turn routing is unsafe: it may spend, wait, notify, or choose fallback incorrectly |
 | Human Decision | IP-004, IP-014, IP-017, IP-027, IP-030, IP-033 | Scoped decision canary; Product/readiness canary when first-screen human copy changes | user todos, decision scope, operator-gate/reward preview, deferred resume candidates | one concrete user ask, one scoped non-blocking gate, one preview-or-append dry run | humans may be asked the wrong question, or an agent may continue without the needed decision |
-| State And Boundary | IP-005, IP-006, IP-011, IP-016, IP-019, IP-020, IP-022, IP-023, IP-025, IP-026, IP-028, IP-031, IP-032, IP-035, IP-036 | Projection and boundary canary; Hot-path route canary when the projection feeds quota/status | active state, todo metadata, task graph, authority source, claim lease, completed-work archive, install ownership, connector runtime policy, operation receipt, public/private scan | fixture state plus structured projection check; boundary scan for touched public files | compact state and executable truth diverge, so dashboards and agents may trust stale or unsafe authority |
+| State And Boundary | IP-005, IP-006, IP-011, IP-016, IP-019, IP-020, IP-022, IP-023, IP-025, IP-026, IP-028, IP-031, IP-032, IP-035, IP-036, IP-037 | Projection and boundary canary; Hot-path route canary when the projection feeds quota/status | active state, todo metadata, task graph, authority source, claim lease, completed-work archive, install ownership, connector runtime policy, operation receipt, retired setting projection, public/private scan | fixture state plus structured projection check; boundary scan for touched public files | compact state and executable truth diverge, so dashboards and agents may trust stale or unsafe authority |
 | Evidence Lifecycle | IP-012, IP-015 | Evidence lifecycle canary; Product/readiness canary when evidence is rendered | external handle observation, benchmark lifecycle reducer, compact result projection | compact public-safe evidence fixture with raw-material exclusion assertions | progress evidence may be missing, double-counted, or represented with unsafe raw material |
 | Planning Governance | IP-010, IP-013, IP-018, IP-024, IP-034 | Planning governance canary; Hot-path route canary when cadence changes affect execution | stalled run history, autonomous replan obligation, repair delta, cadence hint, plan-to-todo writeback | two-turn stalled fixture plus repair/writeback delta assertion | the agent may keep planning in prose while the machine-visible frontier stays unchanged |
 
@@ -345,6 +345,7 @@ Projection, authority, write scope, and lease integrity.
 | P1 | IP-032 | Completed Work Archive With Durable Decision Retention | Archive selector plus controller | no interruption; preview-then-execute readback | treat archived done work as history, keep durable decisions authoritative, and never move another role's lane |
 | P1 | IP-035 | Install Ownership Is Not An Update Permission | Install lifecycle owner plus user | no silent mutation; report the owning installer and its command | classify the install before mutating it; when LoopX does not own it, hand back the owner-owned command instead of switching install channels |
 | P1 | IP-036 | A Lost Response Is Not An Absent Commit | Effect dispatcher plus caller | no interruption unless recovery needs a user decision; report the receipt read back | name the write with a stable operation id, recover by readback instead of blind retry, and never leave a committed record pointing at material nobody published |
+| P1 | IP-037 | A Retired Setting Is Not An Absent Setting | Configuration reader plus migration owner | no interruption; keep the retired entry visible and read-only where it was once configurable | reject the retired activation before any write, carry its reason in the projection, and treat clearing it as neither enable nor bootstrap of the replacement |
 
 ### Evidence Lifecycle
 
@@ -2618,6 +2619,145 @@ flowchart TD
   `shadow_entry_delivery.ts` keep the settled-vocabulary contract
   (`delivered` / `replayed` / `ambiguous_reconciled`) single-owner, so a new
   recovery path reuses it instead of inventing a fourth answer.
+- `examples/interaction-pattern-catalog-smoke.py` protects this entry.
+
+#### IP-037 A Retired Setting Is Not An Absent Setting
+
+**Trigger**
+
+- a Goal, registry entry, or settings document still names a configuration
+  whose implementation has been retired, so a reader must decide whether that
+  setting is off, missing, or still writable;
+- the caller is about to re-enable it, clear it, or migrate state that mentions
+  it, and the cheapest wrong move is to treat "no longer supported" as "never
+  existed";
+- the signals that say this already happened are typed, not inferred from
+  prose: a summary carrying `configured: true` with
+  `status: "retired"` and `enabled: false`, a migration row with
+  `attempted: false` and `outcome: "retired"`, a
+  `request_rejected / local_authority_shadow_retired` reply, or a
+  `retired corpus requires lifecycle.retirement_reason` rejection.
+
+**Expected behavior**
+
+Retiring a capability removes what it may write, not what it says. Four rules
+keep "we stopped supporting this" from becoming "this was never configured".
+
+1. **Keep the retired setting in the projection.** The summary of a Goal that
+   still carries the old key stays present and self-describing rather than
+   dropping the field: `local_authority_shadow_summary` returns
+   `{"enabled": False, ..., "status": "retired" if valid else "invalid",
+   "configured": True, ...}`
+   (`loopx/control_plane/coordination/runtime_shadow.py:53-63`), so a malformed
+   setting reads as `invalid` and a retained one reads as `retired` — neither
+   collapses into "unconfigured". Historical records under the old path remain
+   readable and are labelled instead of being relabelled as promotion evidence:
+   `local_authority_shadow_adapter.py:784` computes `legacy_observation` and
+   `:805` stamps each candidate store as `legacy_observation` or
+   `runtime_shadow`.
+2. **Reject re-enabling before any write, and reject it by code.** The gate sits
+   ahead of the mutation, not inside it:
+   `validate_coordination_shadow_changes` is documented as "Reject retired
+   activation before any registry mutation"
+   (`loopx/control_plane/coordination/runtime_shadow.py:103-115`) and carries the
+   reason in its message (`:67-78`, text at `:72`). The old runtime RPC keeps
+   its address and answers `local_authority_shadow_retired`
+   (`loopx/control_plane/coordination/local_authority_shadow.ts:57`) rather than
+   disappearing into a transport error, because a rejection that looks like a
+   transient failure invites a retry loop.
+3. **Clearing is neither enable nor bootstrap.** One setting is retired; the
+   replacement capture path is configured on its own terms.
+   `apply_coordination_shadow_changes` is documented as "Clear retired settings
+   and configure the transaction-bound shadow independently"
+   (`loopx/control_plane/coordination/runtime_shadow.py:117-131`), and
+   `tests/control_plane/test_local_authority_shadow_config.py:58` pins that
+   clearing preserves the runtime configuration and peer registration instead of
+   silently starting the new capture.
+4. **Migration reports the retirement rather than seeding it.** `migrate-state`
+   keeps the response field callers already parse and answers it with a
+   non-action: `retired_authority_shadow_notices` emits
+   `{"attempted": False, "outcome": "retired", "reason_code":
+   "local_authority_shadow_retired"}`
+   (`loopx/state_migration.py:236-241`), is still the call site's source of that
+   column (`:395`), and renders `attempted=` in the operator table (`:460`). The
+   same rule holds where retirement is a lifecycle state instead of a deletion:
+   a corpus may not claim `state: "retired"` without a reason
+   (`loopx/capabilities/reward_memory/registry.py:156-157`).
+
+IP-030 owns applying a machine configuration under a revision guard, which
+presumes the setting still has an apply path; this is the case where the apply
+path is gone and the setting remains. IP-032 keeps durable decisions
+authoritative across an archive of completed work, and IP-033 reads a recorded
+rejection as a decision that is present — both are about what stays *writable
+or countable* after a state change, while this pattern is about what stays
+*legible* after a capability change. IP-036 is its transport-side twin: a lost
+response must not be read as an absent commit, and a retired path must not be
+read as an absent setting. IP-006 owns a projected write scope that disagrees
+with its checkpoint; here the projection is honest about being inert, and the
+danger is a reader inferring a write from silence.
+
+**Visual Model**
+
+```mermaid
+flowchart TD
+  A["reader finds a setting whose path is retired"] --> B{"is the setting well-formed?"}
+  B -->|"malformed"| C["status=invalid, configured=true; offer clear, never enable"]
+  B -->|"retained"| D["status=retired, enabled=false, configured=true"]
+  D --> E{"what does the caller want?"}
+  E -->|"enable the old path"| F["reject by code before any registry write"]
+  E -->|"clear it"| G["clear only this key; replacement stays as configured"]
+  E -->|"migrate state"| H["report attempted=false, outcome=retired; do not seed"]
+  E -->|"read history"| I["label legacy records as legacy; never as promotion proof"]
+  F --> J["operator doc names the replacement path"]
+  G --> J
+  H --> J
+```
+
+| Situation | What must be visible | What must not happen |
+| --- | --- | --- |
+| Retained old key | `configured=true`, `enabled=false`, `status=retired` | field dropped, or read as unconfigured |
+| Re-enable attempt | typed rejection naming the reason code | registry or store write, or a retryable transport error |
+| Clear request | this key removed, replacement untouched | implicit bootstrap of the new capture |
+| Migration row | `attempted=false`, `outcome=retired` | seeding a second observation store |
+| Historical read | records labelled `legacy_observation` | counted as promotion evidence |
+
+**Bad smell**
+
+- the setting vanishes from status or the settings surface, so an operator
+  reading an old Goal cannot tell whether they ever opted in, and the history
+  under it loses its explanation;
+- a retired enable flag that "does nothing" instead of rejecting, so a script or
+  a stale client believes it turned capture on;
+- clearing a retired key as a side door that boots the replacement capture, or
+  a migration that re-seeds the retired observer because the response field is
+  still expected;
+- retrying `local_authority_shadow_retired` as a transient storage failure;
+- promoting a historical `legacy_observation` record into evidence for the
+  transaction-bound lineage because both rows live in one directory;
+- a retirement that ships as a deletion with no reason recorded, so the next
+  reader reinstates it as a bug fix.
+
+**Validation**
+
+- `tests/control_plane/test_local_authority_shadow_cli_e2e.py` runs the real CLI
+  upgrade journey: `:10` proves a retained retired setting can neither enable
+  capture nor satisfy a bootstrap, `:20` asserts the rejection names
+  `local_authority_shadow_retired`, and `:25` asserts status still reads
+  `retired`.
+- `tests/control_plane/test_local_authority_shadow_config.py` pins both halves:
+  `:49` a retired enable rejects without rewriting the registry (dry-run and
+  execute), `:58` clearing preserves runtime configuration and peer
+  registration.
+- `tests/control_plane/test_state_migration_authority_shadow.py` keeps
+  `migrate-state` reporting retirement instead of seeding it, and
+  `tests/control_plane_ts/local_authority_shadow.test.ts` keeps the old RPC
+  answer typed.
+- `tests/control_plane/test_coordination_runtime_shadow_adapter.py:637` proves a
+  retired CLI observer cannot overwrite transaction evidence, which is what
+  makes the historical read safe rather than merely available.
+- `docs/reference/authority-observation-retirement.md` owns the operator
+  transition and rollback wording; `#5011` records this as the answer to the
+  shared-authority RFC's open question on keeping one capture boundary.
 - `examples/interaction-pattern-catalog-smoke.py` protects this entry.
 
 ### Evidence Lifecycle
