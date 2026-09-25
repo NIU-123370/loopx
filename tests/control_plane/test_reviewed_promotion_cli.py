@@ -6,16 +6,88 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
-from tests.control_plane.test_local_authority_shadow_cli_e2e import (
-    _workspace,
-    _cli,
-    _command,
-    _env,
-    REPO_ROOT,
-)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CLI_TIMEOUT_SECONDS = 60
+
+# Local on purpose. These helpers used to be imported from a sibling test
+# module, and a refactor of that module dropped them, which uncollected this
+# whole suite without failing a single assertion.
+
+
+def _workspace(tmp_path: Path, *, goal_id: str) -> tuple[Path, Path, Path]:
+    repo = tmp_path / goal_id
+    repo.mkdir()
+    state = repo / "ACTIVE_GOAL_STATE.md"
+    state.write_text(
+        "---\n"
+        f"goal_id: {goal_id}\n"
+        "handoff_mode: hard_lease\n"
+        "updated_at: 2026-09-02T00:00:00+00:00\n"
+        "---\n\n"
+        "## Agent Todo\n\n",
+        encoding="utf-8",
+    )
+    runtime_root = tmp_path / f"{goal_id}-runtime"
+    registry = tmp_path / f"{goal_id}-registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "common_runtime_root": str(runtime_root),
+                "goals": [
+                    {
+                        "id": goal_id,
+                        "status": "active",
+                        "repo": str(repo),
+                        "state_file": state.name,
+                        "coordination": {
+                            "agent_model": "peer_v1",
+                            "registered_agents": ["agent-a", "agent-b"],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return registry, state, runtime_root
+
+
+def _command(registry: Path, runtime_root: Path, *args: str) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "loopx.cli",
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(runtime_root),
+        "--format",
+        "json",
+        *args,
+    ]
+
+
+def _env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    return env
+
+
+def _cli(registry: Path, runtime_root: Path, *args: str) -> dict[str, object]:
+    completed = subprocess.run(
+        _command(registry, runtime_root, *args),
+        cwd=REPO_ROOT,
+        env=_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=CLI_TIMEOUT_SECONDS,
+    )
+    return json.loads(completed.stdout)
 
 
 def command_result(registry, root, *args):
